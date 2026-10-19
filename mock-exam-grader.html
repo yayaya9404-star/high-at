@@ -1,0 +1,914 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>모의고사 채점</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f5f6f8; --card:#fff; --line:#e6e8ec; --text:#1f2430; --sub:#6b7280; --main:#2f5bea; --main-soft:#eef2ff;
+  --ok:#15803d; --ok-bg:#ecfdf3; --ok-line:#a7e3bd;
+  --warn:#b45309; --warn-bg:#fff8e6; --warn-line:#f3d38a;
+  --bad:#c0262d; --bad-bg:#fff1f1; --bad-line:#f2b0b3;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Pretendard,-apple-system,"Malgun Gothic",sans-serif;font-size:14px}
+header{background:#fff;border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;margin:0}
+.mode{font-size:12px;padding:3px 10px;border-radius:99px;background:#f1f5f9;color:var(--sub)}
+.mode.on{background:var(--ok-bg);color:var(--ok)}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{border:0;background:none;padding:8px 14px;border-radius:8px;font:inherit;font-weight:600;color:var(--sub);cursor:pointer}
+nav button.active{background:var(--main-soft);color:var(--main)}
+main{padding:20px 24px;max-width:1500px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.grid2{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}
+input,select{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text)}
+input:focus,select:focus{outline:2px solid var(--main-soft);border-color:var(--main)}
+button.btn{font:inherit;font-weight:600;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer}
+button.btn.primary{background:var(--main);border-color:var(--main);color:#fff}
+button.btn.danger{color:var(--bad);border-color:var(--bad-line)}
+button.btn.sm{padding:4px 10px;font-size:12px}
+button.btn:disabled{opacity:.5;cursor:default}
+h2{font-size:16px;margin:0 0 12px}
+h3{font-size:14px;margin:18px 0 8px}
+.muted{color:var(--sub);font-size:12px}
+.exam-item{padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+.exam-item.sel{border-color:var(--main);background:var(--main-soft)}
+.exam-item b{display:block}
+table{border-collapse:collapse;width:100%}
+th{font-size:12px;color:var(--sub);font-weight:600;text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);background:#fafbfc}
+td{padding:6px;border-bottom:1px solid #f0f1f3}
+tr.click{cursor:pointer} tr.click:hover td{background:#f8faff}
+.pill{display:inline-block;color:#fff;font-weight:700;font-size:12px;padding:3px 10px;border-radius:99px;white-space:nowrap}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;border:1px solid}
+.tag.ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-line)}
+.tag.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-line)}
+.tag.bad{color:var(--bad);background:var(--bad-bg);border-color:var(--bad-line)}
+.qno{display:inline-flex;width:26px;height:24px;align-items:center;justify-content:center;border-radius:5px;border:1px solid var(--line);font-size:12px;color:var(--sub)}
+.qno.x{border-color:var(--bad-line);color:var(--bad);background:var(--bad-bg)}
+.items-table td input,.items-table td select{padding:4px 6px}
+.total{font-weight:700}
+.total.bad{color:var(--bad)}
+.omr-input{font-family:ui-monospace,Consolas,monospace;font-size:20px;letter-spacing:3px;width:100%}
+.omr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(46px,1fr));gap:6px;margin-top:12px}
+.omr-cell{border:1px solid var(--line);border-radius:8px;text-align:center;padding:4px 0}
+.omr-cell .n{font-size:11px;color:var(--sub)}
+.omr-cell .a{font-size:16px;font-weight:700;height:20px}
+.omr-cell.o{background:var(--ok-bg);border-color:var(--ok-line)}
+.omr-cell.x{background:var(--bad-bg);border-color:var(--bad-line)}
+.omr-cell.cur{outline:2px solid var(--main)}
+.score-big{font-size:28px;font-weight:800}
+.stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 16px;min-width:110px}
+.stat b{display:block;font-size:20px}
+.subtabs{display:flex;gap:6px;margin:6px 0 12px}
+.subtabs button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:5px 14px;font:inherit;cursor:pointer}
+.subtabs button.active{background:var(--text);color:#fff;border-color:var(--text)}
+.dist{display:flex;gap:4px}
+.dist span{min-width:38px;text-align:center;font-size:12px;padding:2px 0;border-radius:4px;background:#f3f4f6}
+.dist span.c{background:var(--ok-bg);color:var(--ok);font-weight:700}
+.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 12px;z-index:50}
+.modal-bg.show{display:flex}
+.modal{background:#fff;border-radius:14px;width:min(1400px,100%);padding:22px}
+.report-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1000px){.report-cols{grid-template-columns:1fr}}
+.report-cols td,.report-cols th{text-align:center}
+.cat-bars{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin:12px 0 18px}
+.cat-bar{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.bar{height:8px;background:#eef0f3;border-radius:99px;margin-top:6px;position:relative;overflow:hidden}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
+.mark-o{color:var(--ok)} .mark-x{color:var(--bad)}
+.files li{margin:4px 0}
+.stu-row.cur td{background:var(--main-soft);font-weight:700}
+.stu-row.done td:nth-child(3){color:var(--ok)}
+.cur-name{font-size:22px;font-weight:800}
+.done-box{background:var(--ok-bg);border:1px solid var(--ok-line);color:var(--ok);border-radius:10px;padding:12px 14px;margin-top:12px;font-weight:600}
+.hint{background:#f8fafc;border:1px dashed var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--sub);margin:10px 0}
+@media print{
+  body *{visibility:hidden}
+  .modal,.modal *{visibility:visible}
+  .modal-bg{position:absolute;background:none;padding:0}
+  .modal{position:absolute;left:0;top:0;width:100%}
+  .noprint{display:none!important}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>모의고사 채점</h1>
+  <span id="mode" class="mode"></span>
+  <nav>
+    <button data-tab="exam" class="active">시험 관리</button>
+    <button data-tab="roster">학생 명단</button>
+    <button data-tab="omr">OMR 입력</button>
+    <button data-tab="result">결과·분석</button>
+    <button data-tab="hist">학생 기록</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-exam"></section>
+  <section id="tab-roster" hidden></section>
+  <section id="tab-omr" hidden></section>
+  <section id="tab-result" hidden></section>
+  <section id="tab-hist" hidden></section>
+</main>
+<div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
+
+<script>
+/* ===================== 설정 ===================== */
+const SUPABASE_URL = '';        // 예: https://xxxx.supabase.co
+const SUPABASE_ANON_KEY = '';   // anon public key
+const FILE_BUCKET = 'exam-papers';
+const BRANCHES = ['남동탄','수원','장안','서수원','운정1','운정2'];
+
+const CATS = ['듣기','대의파악','세부정보','어법·어휘','빈칸추론','간접쓰기','장문독해'];
+const CAT_COLORS = {'듣기':'#64748b','대의파악':'#1fa45a','세부정보':'#0f6e8f','어법·어휘':'#d98a0b','빈칸추론':'#7e3fb3','간접쓰기':'#c4700c','장문독해':'#c0262d'};
+
+/* 학평·수능 영어 표준 문항 유형 (45문항) */
+const STD_TYPES = [
+  ['듣기','목적'],['듣기','의견'],['듣기','관계'],['듣기','그림 불일치'],['듣기','할 일'],
+  ['듣기','금액'],['듣기','이유'],['듣기','언급 안 된 것'],['듣기','내용 불일치'],['듣기','도표'],
+  ['듣기','짧은 대화 응답'],['듣기','짧은 대화 응답'],['듣기','긴 대화 응답'],['듣기','긴 대화 응답'],['듣기','상황 응답'],
+  ['듣기','주제'],['듣기','언급 안 된 것'],
+  ['대의파악','글의 목적'],['대의파악','심경 변화'],['대의파악','필자 주장'],['대의파악','함축 의미'],
+  ['대의파악','요지'],['대의파악','주제'],['대의파악','제목'],
+  ['세부정보','도표'],['세부정보','내용 불일치'],['세부정보','안내문 불일치'],['세부정보','안내문 일치'],
+  ['어법·어휘','어법'],['어법·어휘','어휘'],
+  ['빈칸추론','빈칸'],['빈칸추론','빈칸'],['빈칸추론','빈칸'],['빈칸추론','빈칸'],
+  ['간접쓰기','무관한 문장'],['간접쓰기','글의 순서'],['간접쓰기','글의 순서'],['간접쓰기','문장 삽입'],['간접쓰기','문장 삽입'],
+  ['장문독해','요약문'],['장문독해','장문 제목'],['장문독해','장문 어휘'],
+  ['장문독해','장문 순서'],['장문독해','장문 지칭'],['장문독해','장문 내용 불일치']
+];
+
+/* 이번 시험 (THE PREMIUM 고1 영어) — 시험지·정답표에서 읽은 값 */
+const PRESET = {
+  name:'THE PREMIUM 고1 영어', grade:'고1', publisher:'대성학력개발연구소',
+  answers:'225413145451452131312445453525322144223315554',
+  three:[6,13,14,21,30,33,34,37,39,42]
+};
+
+/* ===================== 데이터 계층 ===================== */
+const sb = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const LS = {
+  get(k,d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ alert('브라우저 저장에 실패했습니다.'); } }
+};
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(16)+Math.random().toString(16).slice(2));
+const nowIso = () => new Date().toISOString();
+
+const DB = {
+  async exams(){
+    if(sb){ const {data,error}=await sb.from('mx_exams').select('*').order('created_at',{ascending:false}); if(error) throw error; return data; }
+    return LS.get('mx_exams',[]);
+  },
+  async saveExam(e){
+    if(sb){ const {data,error}=await sb.from('mx_exams').upsert(e).select().single(); if(error) throw error; return data; }
+    const all=LS.get('mx_exams',[]); const i=all.findIndex(x=>x.id===e.id);
+    if(i>=0) all[i]=e; else all.unshift(e); LS.set('mx_exams',all); return e;
+  },
+  async deleteExam(id){
+    if(sb){
+      const fs = await DB.files(id);
+      if(fs.length) await sb.storage.from(FILE_BUCKET).remove(fs.map(f=>f.path));
+      const {error}=await sb.from('mx_exams').delete().eq('id',id); if(error) throw error; return;
+    }
+    LS.set('mx_exams',LS.get('mx_exams',[]).filter(x=>x.id!==id));
+    LS.set('mx_responses',LS.get('mx_responses',[]).filter(x=>x.exam_id!==id));
+  },
+  async responsesByMember(code){
+    if(sb){ const {data,error}=await sb.from('mx_responses').select('*').eq('member_code',code); if(error) throw error; return data; }
+    return LS.get('mx_responses',[]).filter(x=>x.member_code===code);
+  },
+  async responses(examId){
+    if(sb){ const {data,error}=await sb.from('mx_responses').select('*').eq('exam_id',examId); if(error) throw error; return data; }
+    return LS.get('mx_responses',[]).filter(x=>x.exam_id===examId);
+  },
+  async saveResponse(r){
+    if(sb){ const {data,error}=await sb.from('mx_responses').upsert(r).select().single(); if(error) throw error; return data; }
+    const all=LS.get('mx_responses',[]); const i=all.findIndex(x=>x.id===r.id);
+    if(i>=0) all[i]=r; else all.push(r); LS.set('mx_responses',all); return r;
+  },
+  async deleteResponse(id){
+    if(sb){ const {error}=await sb.from('mx_responses').delete().eq('id',id); if(error) throw error; return; }
+    LS.set('mx_responses',LS.get('mx_responses',[]).filter(x=>x.id!==id));
+  },
+  async students(branch){
+    if(sb){ const {data,error}=await sb.from('mx_students').select('*').eq('branch',branch).order('seq').range(0,9999); if(error) throw error; return data; }
+    return LS.get('mx_students',[]).filter(x=>x.branch===branch).sort((a,b)=>a.seq-b.seq);
+  },
+  async replaceStudents(branch, rows){
+    if(sb){
+      const del=await sb.from('mx_students').delete().eq('branch',branch); if(del.error) throw del.error;
+      for(let i=0;i<rows.length;i+=500){ const {error}=await sb.from('mx_students').insert(rows.slice(i,i+500)); if(error) throw error; }
+      return;
+    }
+    LS.set('mx_students',[...LS.get('mx_students',[]).filter(x=>x.branch!==branch), ...rows.map(r=>({...r,id:uid()}))]);
+  },
+  async files(examId){
+    if(!sb) return [];
+    const {data,error}=await sb.from('mx_exam_files').select('*').eq('exam_id',examId).order('created_at'); if(error) throw error; return data;
+  },
+  async uploadFile(examId,file,idx){
+    const ext=(file.name.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const path=`${examId}/${Date.now()}_${idx}.${ext}`;
+    const up=await sb.storage.from(FILE_BUCKET).upload(path,file,{contentType:file.type||undefined});
+    if(up.error) throw up.error;
+    const {error}=await sb.from('mx_exam_files').insert({exam_id:examId,file_name:file.name,path});
+    if(error) throw error;
+  },
+  fileUrl(f){ return sb.storage.from(FILE_BUCKET).getPublicUrl(f.path,{download:f.file_name}).data.publicUrl; },
+  async deleteFile(f){
+    await sb.storage.from(FILE_BUCKET).remove([f.path]);
+    const {error}=await sb.from('mx_exam_files').delete().eq('id',f.id); if(error) throw error;
+  }
+};
+
+/* ===================== 공통 ===================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pill = cat => `<span class="pill" style="background:${CAT_COLORS[cat]||'#94a3b8'}">${esc(cat||'미지정')}</span>`;
+const circled = n => n>=1&&n<=5 ? '①②③④⑤'[n-1] : '–';
+const pct = (a,b) => b ? Math.round(a/b*100) : 0;
+const totalPoints = ex => ex.items.reduce((s,it)=>s+(+it.points||0),0);
+const prefs = LS.get('mx_prefs',{branch:'남동탄',threshold:30});
+const savePrefs = () => LS.set('mx_prefs',prefs);
+
+function gradeAnswers(ex, answers){
+  let score=0, correct=0;
+  ex.items.forEach((it,i)=>{ if(+answers[i]===+it.answer){ score+=+it.points; correct++; } });
+  return {score,correct};
+}
+function makeItems(n, answers='', three=[], useStd=false){
+  return Array.from({length:n},(_,i)=>{
+    const t = useStd && n===45 ? STD_TYPES[i] : ['',''];
+    return {no:i+1, answer:+answers[i]||0, points:three.includes(i+1)?3:2, cat:t[0], sub:t[1]};
+  });
+}
+
+let EXAMS=[], editing=null, omrExamId=null, resExamId=null, resCache={}, editingResp=null;
+let STU={}, omrCur=null;   // STU: 분원별 명단 캐시, omrCur: 명단 모드에서 현재 학생 키
+const stuKey = s => s.member_code || ('n:'+s.class_name+'|'+s.student_name);  // 동명이인 구분
+
+/* 학년 표기 통일: '고1', '1학년', '1', '고등1' → '고1' */
+function normGrade(s){
+  s=String(s??'').replace(/\s/g,'');
+  let m=s.match(/(고|중|초)[^0-9]*([1-6])/); if(m) return m[1]+m[2];
+  m=s.match(/^([1-3])(학년)?$/); if(m) return '고'+m[1];
+  return s;
+}
+/* 응답 ↔ 명단 학생 매칭: 둘 다 회원코드가 있으면 코드로, 아니면 분원+반+이름으로 */
+function sameStudent(r,s){
+  if(r.member_code && s.member_code) return r.member_code===s.member_code;
+  return r.branch===(s.branch||prefs.branch) && r.class_name===s.class_name && r.student_name===s.student_name;
+}
+const koCmp=(a,b)=>String(a??'').localeCompare(String(b??''),'ko',{numeric:true});
+async function getStudents(branch, force){
+  if(force || !STU[branch]){
+    try{ STU[branch]=await DB.students(branch); }catch(e){ alert('학생 명단을 불러오지 못했습니다: '+e.message); STU[branch]=[]; }
+  }
+  return STU[branch];
+}
+
+async function loadExams(){
+  try{ EXAMS = await DB.exams(); }catch(e){ alert('시험 목록을 불러오지 못했습니다: '+e.message); EXAMS=[]; }
+}
+async function getResponses(examId, force){
+  if(force || !resCache[examId]){
+    try{ resCache[examId] = await DB.responses(examId); }catch(e){ alert('응답을 불러오지 못했습니다: '+e.message); resCache[examId]=[]; }
+  }
+  return resCache[examId];
+}
+const examById = id => EXAMS.find(e=>e.id===id);
+function examOptions(sel){
+  return EXAMS.map(e=>`<option value="${e.id}" ${e.id===sel?'selected':''}>${esc(e.name)}${e.exam_date?' ('+esc(e.exam_date)+')':''}</option>`).join('');
+}
+
+/* ===================== 탭 ===================== */
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+function showTab(t){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  ['exam','roster','omr','result','hist'].forEach(x=>$('#tab-'+x).hidden = x!==t);
+  if(t==='exam') renderExamTab();
+  if(t==='roster') renderRosterTab();
+  if(t==='omr') renderOmrTab();
+  if(t==='result') renderResultTab();
+  if(t==='hist') renderHistTab();
+}
+
+/* ===================== 1. 시험 관리 ===================== */
+function renderExamTab(){
+  const hasPreset = EXAMS.some(e=>e.name===PRESET.name);
+  $('#tab-exam').innerHTML = `
+  <div class="grid2">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">시험 목록</h2>
+        <button class="btn sm primary" id="newExam">+ 새 시험</button></div>
+      ${hasPreset?'':`<button class="btn sm" id="presetExam" style="width:100%;margin-bottom:10px">이번 시험(THE PREMIUM 고1) 등록</button>`}
+      ${EXAMS.length? EXAMS.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}">
+        <b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} ${esc(e.exam_date||'')} · ${e.q_count}문항 · ${totalPoints(e)}점</span></div>`).join('')
+        : '<p class="muted">등록된 시험이 없습니다.</p>'}
+    </div>
+    <div class="card" id="examEditor">${editing? editorHtml() : '<p class="muted">왼쪽에서 시험을 선택하거나 새로 만드세요.</p>'}</div>
+  </div>`;
+  $('#newExam').onclick=()=>{ editing={id:uid(),name:'',grade:'',exam_date:'',q_count:45,items:makeItems(45,'',[],true),_new:true}; renderExamTab(); };
+  const p=$('#presetExam'); if(p) p.onclick=()=>{
+    editing={id:uid(),name:PRESET.name,grade:PRESET.grade,exam_date:'',q_count:45,items:makeItems(45,PRESET.answers,PRESET.three,true),_new:true};
+    renderExamTab();
+  };
+  document.querySelectorAll('.exam-item').forEach(el=>el.onclick=()=>{ editing=JSON.parse(JSON.stringify(examById(el.dataset.id))); renderExamTab(); });
+  if(editing) bindEditor();
+}
+
+function editorHtml(){
+  const e=editing, tp=totalPoints(e), threeList=e.items.filter(i=>+i.points===3).map(i=>i.no).join(', ');
+  const ansStr=e.items.map(i=>i.answer||0).join('');
+  return `
+  <h2>${e._new?'새 시험 등록':'시험 수정'}</h2>
+  <div class="row">
+    <label class="f" style="flex:2;min-width:220px">시험명<input id="exName" value="${esc(e.name)}" placeholder="예: THE PREMIUM 고1 영어 10월"></label>
+    <label class="f">학년<input id="exGrade" value="${esc(e.grade)}" style="width:80px"></label>
+    <label class="f">시행일<input id="exDate" type="date" value="${esc(e.exam_date)}"></label>
+    <label class="f">문항 수<input id="exQ" type="number" min="1" max="100" value="${e.q_count}" style="width:80px"></label>
+  </div>
+  <h3>일괄 입력</h3>
+  <div class="row">
+    <label class="f" style="flex:1;min-width:300px">정답 (번호 순서대로 숫자만)<input id="bulkAns" class="omr-input" style="font-size:15px;letter-spacing:2px" value="${ansStr}"></label>
+    <button class="btn" id="applyAns" style="align-self:flex-end">정답 적용</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <label class="f" style="flex:1;min-width:300px">3점 문항 번호 (쉼표 구분, 나머지는 2점)<input id="bulk3" value="${threeList}"></label>
+    <button class="btn" id="apply3" style="align-self:flex-end">배점 적용</button>
+    <button class="btn" id="applyStd" style="align-self:flex-end" ${e.q_count===45?'':'disabled'}>학평 표준 유형 적용</button>
+  </div>
+  <p>총점: <span class="total ${tp===100?'':'bad'}">${tp}점</span> ${tp===100?'':'<span class="muted">(100점이 아닙니다 — 배점을 확인하세요)</span>'}
+     · 정답 미입력 ${e.items.filter(i=>!i.answer).length}문항 · 유형 미지정 ${e.items.filter(i=>!i.cat).length}문항</p>
+  <div style="max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:8px">
+  <table class="items-table"><thead><tr><th>번호</th><th>정답</th><th>배점</th><th>대분류</th><th>세부 유형</th></tr></thead><tbody>
+  ${e.items.map((it,i)=>`<tr>
+    <td>${it.no}</td>
+    <td><select data-i="${i}" data-k="answer">${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${+it.answer===n?'selected':''}>${n?circled(n):'-'}</option>`).join('')}</select></td>
+    <td><input data-i="${i}" data-k="points" type="number" min="0" max="10" value="${it.points}" style="width:60px"></td>
+    <td><select data-i="${i}" data-k="cat"><option value="">-</option>${CATS.map(c=>`<option ${it.cat===c?'selected':''}>${c}</option>`).join('')}</select> ${it.cat?pill(it.cat):''}</td>
+    <td><input data-i="${i}" data-k="sub" value="${esc(it.sub)}" style="width:160px"></td>
+  </tr>`).join('')}
+  </tbody></table></div>
+  <div class="row" style="margin-top:14px">
+    <button class="btn primary" id="saveExam">저장</button>
+    ${e._new?'':'<button class="btn danger" id="delExam">시험 삭제</button>'}
+  </div>
+  <h3>시험지·정답지 파일</h3>
+  <div id="fileBox">${sb? (e._new?'<p class="muted">시험을 먼저 저장하면 파일을 올릴 수 있습니다.</p>':'<p class="muted">불러오는 중…</p>') : '<p class="muted">파일 보관은 Supabase 연결 후 사용할 수 있습니다.</p>'}</div>`;
+}
+
+function syncEditorFields(){
+  editing.name=$('#exName').value.trim(); editing.grade=$('#exGrade').value.trim(); editing.exam_date=$('#exDate').value;
+}
+function bindEditor(){
+  const e=editing;
+  $('#exQ').onchange=ev=>{
+    syncEditorFields();
+    const n=Math.max(1,Math.min(100,+ev.target.value||45));
+    const old=e.items; e.q_count=n;
+    e.items=Array.from({length:n},(_,i)=>old[i]||{no:i+1,answer:0,points:2,cat:'',sub:''});
+    renderExamTab();
+  };
+  $('#applyAns').onclick=()=>{
+    syncEditorFields();
+    const s=$('#bulkAns').value.replace(/[^0-5]/g,'');
+    if(s.length!==e.q_count && !confirm(`입력한 정답이 ${s.length}개입니다 (문항 수 ${e.q_count}). 그대로 적용할까요?`)) return;
+    e.items.forEach((it,i)=>it.answer=+s[i]||0); renderExamTab();
+  };
+  $('#apply3').onclick=()=>{
+    syncEditorFields();
+    const nums=$('#bulk3').value.split(/[^0-9]+/).filter(Boolean).map(Number);
+    e.items.forEach(it=>it.points=nums.includes(it.no)?3:2); renderExamTab();
+  };
+  $('#applyStd').onclick=()=>{
+    syncEditorFields();
+    if(!confirm('번호별 유형을 학평 표준으로 덮어씁니다. 진행할까요?')) return;
+    e.items.forEach((it,i)=>{ it.cat=STD_TYPES[i][0]; it.sub=STD_TYPES[i][1]; }); renderExamTab();
+  };
+  document.querySelectorAll('.items-table [data-i]').forEach(el=>el.onchange=()=>{
+    const it=e.items[+el.dataset.i], k=el.dataset.k;
+    it[k] = (k==='answer'||k==='points') ? (+el.value||0) : el.value.trim();
+    if(k==='cat'||k==='points'||k==='answer'){ syncEditorFields(); renderExamTab(); }
+  });
+  $('#saveExam').onclick=async()=>{
+    syncEditorFields();
+    if(!e.name) return alert('시험명을 입력하세요.');
+    const tp=totalPoints(e);
+    if(tp!==100 && !confirm(`총점이 ${tp}점입니다. 그래도 저장할까요?`)) return;
+    if(e.items.some(i=>!i.answer) && !confirm('정답이 비어 있는 문항이 있습니다. 그래도 저장할까요?')) return;
+    const rec={id:e.id,name:e.name,grade:e.grade,exam_date:e.exam_date||null,q_count:e.q_count,items:e.items};
+    if(!sb) rec.created_at = e.created_at || nowIso();
+    try{
+      const saved=await DB.saveExam(rec);
+      // 정답·배점이 바뀌면 기존 응답 점수 재계산
+      const rs=await getResponses(saved.id,true);
+      for(const r of rs){ const g=gradeAnswers(saved,r.answers); if(g.score!==r.score){ r.score=g.score; await DB.saveResponse(r); } }
+      await loadExams(); editing=JSON.parse(JSON.stringify(saved)); renderExamTab();
+      alert('저장했습니다.'+(rs.length?` (응답 ${rs.length}건 점수 재계산)`:''));
+    }catch(err){ alert('저장 실패: '+err.message); }
+  };
+  const d=$('#delExam'); if(d) d.onclick=async()=>{
+    if(!confirm(`'${e.name}' 시험과 입력된 학생 응답을 모두 삭제합니다. 되돌릴 수 없습니다.`)) return;
+    try{ await DB.deleteExam(e.id); delete resCache[e.id]; editing=null; await loadExams(); renderExamTab(); }
+    catch(err){ alert('삭제 실패: '+err.message); }
+  };
+  if(sb && !e._new) renderFiles();
+}
+
+async function renderFiles(){
+  const box=$('#fileBox'); if(!box) return;
+  let fs=[]; try{ fs=await DB.files(editing.id); }catch(err){ box.innerHTML='<p class="muted">파일 목록을 불러오지 못했습니다: '+esc(err.message)+'</p>'; return; }
+  box.innerHTML=`
+    <div class="row"><input type="file" id="fileIn" multiple accept="image/*,application/pdf"><button class="btn sm" id="upBtn">업로드</button></div>
+    <ul class="files">${fs.map(f=>`<li><a href="${DB.fileUrl(f)}" target="_blank" rel="noopener">${esc(f.file_name)}</a>
+      <button class="btn sm danger" data-del="${f.id}">삭제</button></li>`).join('') || '<li class="muted">올린 파일이 없습니다.</li>'}</ul>`;
+  $('#upBtn').onclick=async()=>{
+    const files=[...$('#fileIn').files]; if(!files.length) return;
+    $('#upBtn').disabled=true; $('#upBtn').textContent='업로드 중…';
+    try{ for(let i=0;i<files.length;i++) await DB.uploadFile(editing.id,files[i],i); }
+    catch(err){ alert('업로드 실패: '+err.message); }
+    renderFiles();
+  };
+  box.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    const f=fs.find(x=>x.id===b.dataset.del); if(!confirm(`${f.file_name} 파일을 삭제할까요?`)) return;
+    try{ await DB.deleteFile(f); }catch(err){ alert('삭제 실패: '+err.message); } renderFiles();
+  });
+}
+
+/* ===================== 학생 명단 ===================== */
+let rosterDraft=null;   // {header, rows, map:{name,cls,grade,branch}}
+function matchBranch(v){
+  v=String(v??'').trim(); if(BRANCHES.includes(v)) return v;
+  const hit=[...BRANCHES].sort((a,b)=>b.length-a.length).find(b=>v.includes(b));  // '서수원'이 '수원'보다 먼저
+  return hit||v;
+}
+async function readSheet(file){
+  let wb;
+  if(/\.csv$/i.test(file.name)){
+    const buf=await file.arrayBuffer(); let text;
+    try{ text=new TextDecoder('utf-8',{fatal:true}).decode(buf); }catch(e){ text=new TextDecoder('euc-kr').decode(buf); }
+    wb=XLSX.read(text.replace(/^﻿/,''),{type:'string'});
+  } else wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+  const aoa=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false});
+  let hi=aoa.findIndex(r=>r.some(c=>/이름|성명/.test(String(c)))); if(hi<0) hi=0;
+  const header=(aoa[hi]||[]).map(c=>String(c).trim());
+  const rows=aoa.slice(hi+1).filter(r=>r.some(c=>String(c).trim()!==''));
+  const find=re=>header.findIndex(h=>re.test(h));
+  const g1=find(/응시|시험/);
+  const code=find(/회원\s*코드|회원\s*번호|코드|code|^id$/i);
+  const no=header.findIndex((h,i)=>i!==code && /번호|연락처|전화|휴대/.test(h));
+  return {header, rows, map:{code, name:find(/이름|성명/), cls:find(/반|클래스|class/i), no, grade:g1>=0?g1:find(/학년|레벨/), branch:find(/분원|지점|캠퍼스/)}};
+}
+function draftRows(d){
+  const cell=(r,i)=>i>=0?String(r[i]??'').trim():'';
+  return d.rows.map(r=>({
+    branch: d.map.branch>=0 ? matchBranch(cell(r,d.map.branch)) : prefs.branch,
+    class_name: cell(r,d.map.cls), student_name: cell(r,d.map.name),
+    grade: d.map.grade>=0 ? normGrade(cell(r,d.map.grade)) : '',
+    member_code: cell(r,d.map.code), student_no: cell(r,d.map.no)
+  })).filter(x=>x.student_name);
+}
+async function renderRosterTab(){
+  const br=prefs.branch, list=await getStudents(br);
+  const byCls={}; list.forEach(s=>(byCls[s.class_name]=byCls[s.class_name]||[]).push(s));
+  $('#tab-roster').innerHTML=`
+  <div class="grid2" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+    <div class="card">
+      <h2>명단 올리기</h2>
+      <p class="muted">엑셀(.xlsx) 또는 CSV 파일. 이름·반·응시 학년 열을 자동으로 찾고, 분원 열이 없으면 아래에서 고른 분원으로 들어갑니다.<br>올리면 해당 분원의 기존 명단은 새 명단으로 교체됩니다. 파일에 적힌 순서가 입력 순서가 됩니다.</p>
+      <div class="row"><label class="f">분원<select id="rBranch">${BRANCHES.map(b=>`<option ${b===br?'selected':''}>${b}</option>`).join('')}</select></label>
+        <label class="f">파일<input type="file" id="rFile" accept=".xlsx,.xls,.csv"></label></div>
+      <div id="rDraft"></div>
+    </div>
+    <div class="card">
+      <h2>${esc(br)} 명단 (${list.length}명)</h2>
+      ${list.length?`<table><thead><tr><th>반</th><th>인원</th><th>응시 학년</th><th>학생</th></tr></thead><tbody>
+        ${Object.keys(byCls).sort(koCmp).map(c=>{ const ss=byCls[c], gc={}; ss.forEach(s=>gc[s.grade||'-']=(gc[s.grade||'-']||0)+1);
+          return `<tr><td><b>${esc(c||'-')}</b></td><td>${ss.length}</td><td>${Object.entries(gc).map(([g,n])=>esc(g)+' '+n).join(' · ')}</td><td class="muted">${ss.map(s=>esc(s.student_name)).join(', ')}</td></tr>`; }).join('')}
+      </tbody></table>`:'<p class="muted">아직 명단이 없습니다.</p>'}
+    </div>
+  </div>`;
+  $('#rBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderRosterTab(); };
+  $('#rFile').onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    if(!window.XLSX) return alert('엑셀 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
+    try{ rosterDraft=await readSheet(f); renderDraft(); }catch(err){ alert('파일을 읽지 못했습니다: '+err.message); }
+  };
+  if(rosterDraft) renderDraft();
+}
+function renderDraft(){
+  const d=rosterDraft, box=$('#rDraft'); if(!box) return;
+  const sel=(k,label,optional)=>`<label class="f">${label}<select data-map="${k}">${optional?'<option value="-1">(없음)</option>':''}${d.header.map((h,i)=>`<option value="${i}" ${d.map[k]===i?'selected':''}>${esc(h||('열 '+(i+1)))}</option>`).join('')}</select></label>`;
+  const rows=draftRows(d), byBr={}; rows.forEach(r=>byBr[r.branch]=(byBr[r.branch]||0)+1);
+  const badBr=Object.keys(byBr).filter(b=>!BRANCHES.includes(b));
+  const ok=d.map.name>=0 && d.map.cls>=0;
+  box.innerHTML=`
+    <h3>열 확인</h3>
+    <div class="row">${sel('code','회원코드',true)}${sel('name','이름')}${sel('cls','반')}${sel('no','번호',true)}${sel('grade','응시 학년',true)}${sel('branch','분원',true)}</div>
+    ${d.map.code<0?'<p class="muted">회원코드 열이 없으면 반+이름으로 학생을 구분하고, 학생 기록(누적 추적)은 쓸 수 없어요.</p>':''}
+    ${ok?'':'<p class="total bad">이름과 반 열을 지정해 주세요.</p>'}
+    <h3>미리보기 (${rows.length}명 · ${Object.entries(byBr).map(([b,n])=>esc(b)+' '+n+'명').join(', ')})</h3>
+    ${badBr.length?`<p class="total bad">등록되지 않은 분원 이름: ${badBr.map(esc).join(', ')}</p>`:''}
+    <div style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px"><table><thead><tr><th>분원</th><th>회원코드</th><th>반</th><th>이름</th><th>번호</th><th>응시</th></tr></thead><tbody>
+      ${rows.slice(0,50).map(r=>`<tr><td>${esc(r.branch)}</td><td>${esc(r.member_code||'-')}</td><td>${esc(r.class_name)}</td><td>${esc(r.student_name)}</td><td>${esc(r.student_no||'-')}</td><td>${esc(r.grade||'-')}</td></tr>`).join('')}
+      ${rows.length>50?`<tr><td colspan="6" class="muted">… 외 ${rows.length-50}명</td></tr>`:''}
+    </tbody></table></div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="rSave" ${ok&&rows.length?'':'disabled'}>명단 저장</button><button class="btn" id="rCancel">취소</button></div>`;
+  box.querySelectorAll('[data-map]').forEach(s=>s.onchange=()=>{ d.map[s.dataset.map]=+s.value; renderDraft(); });
+  $('#rCancel').onclick=()=>{ rosterDraft=null; renderRosterTab(); };
+  $('#rSave').onclick=async()=>{
+    const groups={};
+    rows.forEach(r=>{ const g=groups[r.branch]=groups[r.branch]||new Map(); const k=r.member_code||(r.class_name+'\u0000'+r.student_name); if(!g.has(k)) g.set(k,r); });
+    const summary=Object.entries(groups).map(([b,m])=>`${b} ${m.size}명`).join(', ');
+    const dupCnt=rows.length-Object.values(groups).reduce((s,m)=>s+m.size,0);
+    if(!confirm(`${summary}\n해당 분원의 기존 명단을 이 명단으로 교체합니다.${dupCnt?`\n(같은 반·같은 이름 ${dupCnt}건은 하나로 합칩니다)`:''}`)) return;
+    try{
+      for(const [b,m] of Object.entries(groups)){
+        await DB.replaceStudents(b,[...m.values()].map((r,i)=>({...r,seq:i+1})));
+        delete STU[b];
+      }
+      rosterDraft=null; renderRosterTab(); alert('명단을 저장했습니다.');
+    }catch(err){ alert('저장 실패: '+err.message); }
+  };
+}
+
+/* ===================== 2. OMR 입력 ===================== */
+async function renderOmrTab(){
+  if(!EXAMS.length){ $('#tab-omr').innerHTML='<div class="card"><p class="muted">먼저 시험을 등록하세요.</p></div>'; return; }
+  if(!omrExamId || !examById(omrExamId)) omrExamId=EXAMS[0].id;
+  const ex=examById(omrExamId);
+  const rs=await getResponses(ex.id);
+
+  // 명단: 이 분원 학생 중 시험 학년과 응시 학년이 같은 학생 (응시 학년이 비어 있으면 포함)
+  const eg=normGrade(ex.grade);
+  const branchAll=await getStudents(prefs.branch);
+  const roster=branchAll.filter(s=>!eg || !s.grade || normGrade(s.grade)===eg);
+  const classes=[...new Set(roster.map(s=>s.class_name))].sort(koCmp);
+  let cls=prefs.omrClass;
+  if(cls!=='__manual' && !classes.includes(cls)) cls = classes.length ? classes[0] : '__manual';
+  const manual = cls==='__manual';
+  const respOf = s => rs.find(r=>sameStudent(r,s));
+
+  let stuList=[], cur=null, curIdx=-1;
+  if(!manual){
+    stuList=roster.filter(s=>s.class_name===cls);
+    cur=stuList.find(s=>stuKey(s)===omrCur) || stuList.find(s=>!respOf(s)) || stuList[0];
+    curIdx=stuList.indexOf(cur); omrCur=cur?stuKey(cur):null;
+    editingResp = cur ? (respOf(cur)||null) : null;
+  }
+  const er=editingResp;
+  const doneCnt=stuList.filter(respOf).length;
+  const allDone=!manual && stuList.length>0 && doneCnt===stuList.length;
+  const list = manual
+    ? rs.filter(r=>r.branch===prefs.branch).sort((a,b)=>koCmp(a.class_name,b.class_name)||koCmp(a.student_name,b.student_name))
+    : [];
+  const rosterHint = manual
+    ? (branchAll.length && !roster.length ? `<div class="hint">${esc(prefs.branch)} 명단에 ${esc(eg)} 응시 학생이 없어요. 명단의 응시 학년이나 시험의 학년을 확인하세요.</div>`
+       : !branchAll.length ? `<div class="hint">학생 명단 탭에서 명단을 올리면, 반을 고르고 학생별로 이어서 입력할 수 있어요.</div>` : '')
+    : '';
+
+  $('#tab-omr').innerHTML=`
+  <div class="grid2" style="grid-template-columns:1fr 340px">
+    <div class="card">
+      <div class="row">
+        <label class="f" style="flex:1;min-width:220px">시험<select id="omrExam">${examOptions(ex.id)}</select></label>
+        <label class="f">분원<select id="omrBranch">${BRANCHES.map(b=>`<option ${b===prefs.branch?'selected':''}>${b}</option>`).join('')}</select></label>
+        ${classes.length?`<label class="f">반<select id="omrClsSel">${classes.map(c=>`<option value="${esc(c)}" ${c===cls?'selected':''}>${esc(c)}</option>`).join('')}<option value="__manual" ${manual?'selected':''}>직접 입력</option></select></label>`:''}
+        ${manual?`<label class="f">반<input id="omrClass" value="${esc(er?er.class_name:(prefs.lastClass||''))}" style="width:110px"></label>
+        <label class="f">이름<input id="omrName" value="${esc(er?er.student_name:'')}" style="width:130px"></label>
+        <label class="f">회원코드 (선택)<input id="omrCode" value="${esc(er?er.member_code||'':'')}" style="width:120px"></label>`
+        :`<input type="hidden" id="omrClass" value="${esc(cls)}"><input type="hidden" id="omrName" value="${esc(cur?cur.student_name:'')}"><input type="hidden" id="omrCode" value="${esc(cur?cur.member_code||'':'')}">`}
+      </div>
+      ${rosterHint}
+      ${!manual&&cur?`<div class="row" style="margin-top:14px;justify-content:space-between">
+        <div><span class="cur-name">${esc(cur.student_name)}</span>
+          <span class="muted"> ${curIdx+1}/${stuList.length}번째 · ${er?'입력됨 (다시 저장하면 수정)':'미입력'}</span></div>
+        <button class="btn sm" id="omrSkip">건너뛰기 (결시)</button></div>`:''}
+      <label class="f" style="margin-top:12px">답안 (${ex.q_count}개 · 숫자 1~5, 무응답은 0) — Enter로 저장${manual?'':' 후 다음 학생'}
+        <input id="omrAns" class="omr-input" maxlength="${ex.q_count}" autocomplete="off" inputmode="numeric" value="${er?er.answers:''}"></label>
+      <div class="row" style="margin-top:10px;justify-content:space-between">
+        <div><span class="score-big" id="omrScore">0</span><span class="muted"> 점 · <span id="omrCnt">0</span>/${ex.q_count} 입력</span></div>
+        <div class="row">${manual&&er?'<span class="muted">수정 중: '+esc(er.student_name)+'</span>':''}
+          ${manual?'<button class="btn" id="omrReset">비우기</button>':''}<button class="btn primary" id="omrSave">저장</button></div>
+      </div>
+      ${allDone?`<div class="done-box">${esc(cls)} ${stuList.length}명 입력을 모두 마쳤어요. 학생을 눌러 수정하거나 다른 반을 고르세요.</div>`:''}
+      <div class="omr-grid" id="omrGrid"></div>
+    </div>
+    <div class="card">
+      ${manual?`
+      <h2>${esc(prefs.branch)} 입력 현황 (${list.length}명)</h2>
+      <div style="max-height:640px;overflow:auto">
+      <table><thead><tr><th>반</th><th>이름</th><th>점수</th><th></th></tr></thead><tbody>
+      ${list.map(r=>`<tr class="click" data-edit="${r.id}"><td>${esc(r.class_name)}</td><td>${esc(r.student_name)}</td><td><b>${r.score}</b>${r.answers.length<ex.q_count?' <span class="muted">('+r.answers.length+')</span>':''}</td>
+        <td><button class="btn sm danger" data-rdel="${r.id}">삭제</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">아직 없습니다.</td></tr>'}
+      </tbody></table></div>`
+      :`
+      <h2>${esc(cls)} (${doneCnt}/${stuList.length} 입력)</h2>
+      <div style="max-height:640px;overflow:auto">
+      <table><thead><tr><th>#</th><th>이름</th><th>점수</th><th></th></tr></thead><tbody>
+      ${stuList.map((s,i)=>{ const r=respOf(s); return `<tr class="click stu-row ${s===cur?'cur':''} ${r?'done':''}" data-stu="${esc(stuKey(s))}"><td>${i+1}</td><td>${esc(s.student_name)}</td>
+        <td>${r?`<b>${r.score}</b>${r.answers.length<ex.q_count?' <span class="muted">('+r.answers.length+')</span>':''}`:'<span class="muted">미입력</span>'}</td>
+        <td>${r?`<button class="btn sm danger" data-rdel="${r.id}">삭제</button>`:''}</td></tr>`; }).join('')}
+      </tbody></table></div>`}
+    </div>
+  </div>`;
+
+  $('#omrExam').onchange=e=>{ omrExamId=e.target.value; editingResp=null; omrCur=null; renderOmrTab(); };
+  $('#omrBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); editingResp=null; omrCur=null; renderOmrTab(); };
+  const cs=$('#omrClsSel'); if(cs) cs.onchange=e=>{ prefs.omrClass=e.target.value; savePrefs(); editingResp=null; omrCur=null; renderOmrTab(); };
+  const ans=$('#omrAns');
+  const update=()=>{
+    const v=ans.value.replace(/[^0-5]/g,''); if(v!==ans.value) ans.value=v;
+    const g=gradeAnswers(ex,v); $('#omrScore').textContent=g.score; $('#omrCnt').textContent=v.length;
+    $('#omrGrid').innerHTML=ex.items.map((it,i)=>{
+      const a=v[i]; const cls = a===undefined?'':(+a===+it.answer?'o':'x');
+      return `<div class="omr-cell ${cls} ${i===v.length?'cur':''}" title="${esc(it.cat+' '+it.sub)}"><div class="n">${it.no}</div><div class="a">${a===undefined?'':(a==='0'?'·':a)}</div></div>`;
+    }).join('');
+  };
+  ans.oninput=update; update();
+
+  // 명단 모드: 저장 후 같은 반에서 아직 입력하지 않은 다음 학생으로
+  const nextStudent=(fromIdx, onlyUndone)=>{
+    if(!stuList.length) return null;
+    const rs2=resCache[ex.id]||[];
+    const done=s=>rs2.some(r=>sameStudent(r,s));
+    const order=[...stuList.slice(fromIdx+1),...stuList.slice(0,fromIdx+1)];
+    return (onlyUndone ? order.find(s=>!done(s)) : null) || stuList[Math.min(fromIdx+1,stuList.length-1)];
+  };
+  const onSaved = manual ? null : ()=>{ const n=nextStudent(curIdx,true); omrCur=n?stuKey(n):omrCur; };
+
+  if(manual){
+    $('#omrName').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); ans.focus(); } };
+    $('#omrClass').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#omrName').focus(); } };
+    $('#omrReset').onclick=()=>{ editingResp=null; renderOmrTab(); };
+  }
+  ans.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); saveOmr(ex,onSaved); } };
+  $('#omrSave').onclick=()=>saveOmr(ex,onSaved);
+  const sk=$('#omrSkip'); if(sk) sk.onclick=()=>{ const n=nextStudent(curIdx,false); omrCur=n?stuKey(n):omrCur; renderOmrTab(); };
+
+  document.querySelectorAll('[data-edit]').forEach(tr=>tr.onclick=e=>{
+    if(e.target.dataset.rdel) return;
+    editingResp=rs.find(r=>r.id===tr.dataset.edit); renderOmrTab(); $('#omrAns').focus();
+  });
+  document.querySelectorAll('[data-stu]').forEach(tr=>tr.onclick=e=>{
+    if(e.target.dataset.rdel) return;
+    omrCur=tr.dataset.stu; renderOmrTab();
+  });
+  document.querySelectorAll('[data-rdel]').forEach(b=>b.onclick=async e=>{
+    e.stopPropagation(); const r=rs.find(x=>x.id===b.dataset.rdel);
+    if(!confirm(`${r.student_name} 학생의 답안을 삭제할까요?`)) return;
+    try{ await DB.deleteResponse(r.id); await getResponses(ex.id,true); if(editingResp&&editingResp.id===r.id) editingResp=null; renderOmrTab(); }
+    catch(err){ alert('삭제 실패: '+err.message); }
+  });
+  if(manual) (er? ans : $('#omrName')).focus();
+  else { ans.focus(); ans.setSelectionRange(ans.value.length, ans.value.length); }
+}
+
+let omrSaving=false;
+async function saveOmr(ex, onSaved){
+  if(omrSaving) return;
+  const code=($('#omrCode')?$('#omrCode').value.trim():'');
+  const name=$('#omrName').value.trim(), cls=$('#omrClass').value.trim(), answers=$('#omrAns').value.replace(/[^0-5]/g,'');
+  if(!name){ alert('이름을 입력하세요.'); $('#omrName').focus(); return; }
+  if(!answers.length){ alert('답안을 입력하세요.'); return; }
+  if(answers.length<ex.q_count && !confirm(`${answers.length}문항만 입력됐습니다. 나머지는 무응답으로 저장할까요?`)) return;
+  const rs=await getResponses(ex.id);
+  let id = editingResp ? editingResp.id : null;
+  const dup = rs.find(r=>r.id!==id && (code ? r.member_code===code : (!r.member_code && r.branch===prefs.branch && r.student_name===name && r.class_name===cls)));
+  if(dup){
+    if(!confirm(`${prefs.branch} ${cls} ${name} 학생 답안이 이미 있습니다. 덮어쓸까요?`)) return;
+    id=dup.id;
+  }
+  const rec={id:id||uid(), exam_id:ex.id, branch:prefs.branch, class_name:cls, student_name:name, member_code:code||null, answers, score:gradeAnswers(ex,answers).score};
+  if(!sb) rec.created_at=nowIso();
+  omrSaving=true;
+  try{
+    await DB.saveResponse(rec); await getResponses(ex.id,true);
+    if(onSaved) onSaved();
+    prefs.lastClass=cls; savePrefs(); editingResp=null; renderOmrTab();
+  }catch(err){ alert('저장 실패: '+err.message); }
+  finally{ omrSaving=false; }
+}
+
+/* ===================== 3. 결과·분석 ===================== */
+let resSub='students', resBranch='전체';
+function wrongRates(ex, rs){
+  return ex.items.map((it,i)=>{
+    const n=rs.length; if(!n) return null;
+    const w=rs.filter(r=>+r.answers[i]!==+it.answer).length;
+    return Math.round(w/n*100);
+  });
+}
+function catScores(ex, answers){
+  const m={};
+  ex.items.forEach((it,i)=>{ const c=it.cat||'미지정'; m[c]=m[c]||{got:0,max:0,ok:0,n:0}; m[c].max+=+it.points; m[c].n++; if(+answers[i]===+it.answer){ m[c].got+=+it.points; m[c].ok++; } });
+  return m;
+}
+const catsOf = ex => [...new Set(ex.items.map(i=>i.cat||'미지정'))].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
+
+async function renderResultTab(){
+  if(!EXAMS.length){ $('#tab-result').innerHTML='<div class="card"><p class="muted">먼저 시험을 등록하세요.</p></div>'; return; }
+  if(!resExamId || !examById(resExamId)) resExamId=EXAMS[0].id;
+  const ex=examById(resExamId);
+  const all=await getResponses(ex.id,true);
+  const rs = resBranch==='전체' ? all : all.filter(r=>r.branch===resBranch);
+  const scores=rs.map(r=>r.score);
+  const avg = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : '-';
+  const cats=catsOf(ex);
+  const sorted=[...rs].sort((a,b)=>b.score-a.score);
+  const rankOf = s => sorted.findIndex(r=>r.score===s)+1;
+  const wr=wrongRates(ex,rs);
+
+  $('#tab-result').innerHTML=`
+  <div class="card">
+    <div class="row" style="margin-bottom:14px">
+      <label class="f" style="flex:1;min-width:220px">시험<select id="resExam">${examOptions(ex.id)}</select></label>
+      <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
+      <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
+      <button class="btn" id="csvBtn" style="align-self:flex-end">CSV 내보내기</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="muted">응시자</span><b>${rs.length}명</b></div>
+      <div class="stat"><span class="muted">평균</span><b>${avg}</b></div>
+      <div class="stat"><span class="muted">최고</span><b>${scores.length?Math.max(...scores):'-'}</b></div>
+      <div class="stat"><span class="muted">최저</span><b>${scores.length?Math.min(...scores):'-'}</b></div>
+    </div>
+    <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button></div>
+    <div style="overflow:auto">
+    ${resSub==='students' ? `
+      <table><thead><tr><th>순위</th><th>분원</th><th>반</th><th>이름</th><th>총점</th>${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+      ${sorted.map(r=>{ const cs=catScores(ex,r.answers); return `<tr class="click" data-rep="${r.id}"><td>${rankOf(r.score)}</td><td>${esc(r.branch)}</td><td>${esc(r.class_name)}</td><td><b>${esc(r.student_name)}</b></td><td><b>${r.score}</b></td>
+        ${cats.map(c=>`<td>${cs[c].got}/${cs[c].max}</td>`).join('')}</tr>`; }).join('') || `<tr><td colspan="${5+cats.length}" class="muted">응답이 없습니다.</td></tr>`}
+      </tbody></table><p class="muted">학생을 클릭하면 개인 리포트가 열립니다.</p>`
+    : `
+      <table><thead><tr><th>번호</th><th>유형</th><th>세부</th><th>정답</th><th>배점</th><th>오답률</th><th>선지별 선택 비율 (①~⑤ / 무응답)</th></tr></thead><tbody>
+      ${ex.items.map((it,i)=>{
+        const cnt=[0,0,0,0,0,0]; rs.forEach(r=>{ const a=+r.answers[i]||0; cnt[a]++; });
+        return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
+          <td><b>${wr[i]==null?'-':wr[i]+'%'}</b></td>
+          <td><div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div></td></tr>`;
+      }).join('')}
+      </tbody></table>`}
+    </div>
+  </div>`;
+  $('#resExam').onchange=e=>{ resExamId=e.target.value; renderResultTab(); };
+  $('#resBranch').onchange=e=>{ resBranch=e.target.value; renderResultTab(); };
+  $('#resTh').onchange=e=>{ prefs.threshold=+e.target.value||30; savePrefs(); };
+  document.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{ resSub=b.dataset.sub; renderResultTab(); });
+  document.querySelectorAll('[data-rep]').forEach(tr=>tr.onclick=()=>openReport(ex, all.find(r=>r.id===tr.dataset.rep), all));
+  $('#csvBtn').onclick=()=>exportCsv(ex, sorted, cats);
+}
+
+function openReport(ex, r, all){
+  const branchRs=all.filter(x=>x.branch===r.branch);
+  const wrAll=wrongRates(ex,all), wrBr=wrongRates(ex,branchRs);
+  const th=prefs.threshold;
+  const rankAll=[...all].sort((a,b)=>b.score-a.score).findIndex(x=>x.score===r.score)+1;
+  const rankBr=[...branchRs].sort((a,b)=>b.score-a.score).findIndex(x=>x.score===r.score)+1;
+  const cs=catScores(ex,r.answers);
+  const brCat={}; catsOf(ex).forEach(c=>{ let ok=0,n=0; branchRs.forEach(x=>{ const s=catScores(ex,x.answers)[c]; ok+=s.ok; n+=s.n; }); brCat[c]=pct(ok,n); });
+  let hideListen = LS.get('mx_hideListen',false);
+
+  const render=()=>{
+    const items=ex.items.map((it,i)=>({it,i})).filter(o=>!(hideListen && o.it.cat==='듣기'));
+    const half=Math.ceil(items.length/2);
+    const rowHtml=({it,i})=>{
+      const a=+r.answers[i]||0, ok=a===+it.answer;
+      const ev= ok ? '<span class="tag ok">양호</span>' : (wrBr[i]!=null && wrBr[i]<th ? '<span class="tag bad">취약</span>' : '<span class="tag warn">주의</span>');
+      return `<tr><td><span class="qno ${ok?'':'x'}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${wrAll[i]}%</td><td>${wrBr[i]}%</td>
+        <td>${ok?'<span class="mark-o">○ 정답</span>':`<span class="mark-x">✕ 오답</span> <span class="muted">(${a?circled(a):'무응답'})</span>`}</td><td>${ev}</td></tr>`;
+    };
+    const tbl=(arr)=>`<table><thead><tr><th>문항 (${arr.length?arr[0].it.no:''}–${arr.length?arr[arr.length-1].it.no:''})</th><th>유형</th><th>전체 오답률</th><th>분원 오답률</th><th>내 응답</th><th>평가</th></tr></thead><tbody>${arr.map(rowHtml).join('')}</tbody></table>`;
+    $('#modal').innerHTML=`
+      <div class="row" style="justify-content:space-between">
+        <div><h2 style="margin:0">${esc(r.student_name)} <span class="muted">${esc(r.branch)} ${esc(r.class_name)}</span></h2><span class="muted">${esc(ex.name)}</span></div>
+        <div class="row noprint"><label class="muted"><input type="checkbox" id="hideL" ${hideListen?'checked':''}> 듣기 제외</label>
+          ${r.member_code?'<button class="btn" id="toHist">누적 기록</button>':''}<button class="btn" onclick="window.print()">인쇄</button><button class="btn" id="closeM">닫기</button></div>
+      </div>
+      <div class="stats" style="margin-top:14px">
+        <div class="stat"><span class="muted">총점</span><b>${r.score} / ${totalPoints(ex)}</b></div>
+        <div class="stat"><span class="muted">분원 석차</span><b>${rankBr} / ${branchRs.length}</b></div>
+        <div class="stat"><span class="muted">전체 석차</span><b>${rankAll} / ${all.length}</b></div>
+      </div>
+      <div class="cat-bars">${catsOf(ex).filter(c=>!(hideListen&&c==='듣기')).map(c=>{ const s=cs[c], my=pct(s.ok,s.n); return `
+        <div class="cat-bar"><div class="row" style="justify-content:space-between">${pill(c)}<span><b>${s.ok}/${s.n}</b> <span class="muted">(${s.got}/${s.max}점)</span></span></div>
+          <div class="bar"><i style="width:${my}%;background:${CAT_COLORS[c]||'#94a3b8'}"></i></div>
+          <div class="muted" style="margin-top:4px">내 정답률 ${my}% · 분원 평균 ${brCat[c]}%</div></div>`; }).join('')}</div>
+      <div class="report-cols"><div>${tbl(items.slice(0,half))}</div><div>${tbl(items.slice(half))}</div></div>
+      <p class="muted" style="margin-top:10px">평가: 정답 → 양호 · 오답 중 분원 오답률 ${th}% 미만(대부분 맞힌 문제) → 취약 · 그 외 오답 → 주의</p>`;
+    $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
+    const toH=$('#toHist'); if(toH) toH.onclick=()=>{ histCode=r.member_code; $('#modalBg').classList.remove('show'); showTab('hist'); };
+    $('#hideL').onchange=e=>{ hideListen=e.target.checked; LS.set('mx_hideListen',hideListen); render(); };
+  };
+  render();
+  $('#modalBg').classList.add('show');
+}
+$('#modalBg').onclick=e=>{ if(e.target.id==='modalBg') e.currentTarget.classList.remove('show'); };
+
+function exportCsv(ex, rows, cats){
+  const head=['회원코드','분원','반','이름','총점',...cats.map(c=>c+'(득점)'),...ex.items.map(i=>i.no+'번')];
+  const lines=[head, ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...ex.items.map((it,i)=>{ const a=+r.answers[i]||0; return a===+it.answer?'O':(a||'-'); })]; })];
+  const csv='\uFEFF'+lines.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`${ex.name}_${resBranch}.csv`; a.click();
+}
+
+/* ===================== 4. 학생 기록 (회원코드 기준 누적) ===================== */
+let histCode=null, histQ='';
+async function renderHistTab(){
+  const br=prefs.branch, list=await getStudents(br);
+  const q=histQ.trim();
+  const found=list.filter(s=>s.member_code && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q)));
+  const noCode=list.length && !list.some(s=>s.member_code);
+  $('#tab-hist').innerHTML=`
+  <div class="grid2">
+    <div class="card">
+      <label class="f">분원<select id="hBranch">${BRANCHES.map(b=>`<option ${b===br?'selected':''}>${b}</option>`).join('')}</select></label>
+      <input id="hQ" placeholder="이름·회원코드·반 검색 (코드 입력 후 Enter)" value="${esc(histQ)}" style="width:100%;margin:10px 0">
+      <div style="max-height:620px;overflow:auto">
+        ${found.map(s=>`<div class="exam-item ${s.member_code===histCode?'sel':''}" data-code="${esc(s.member_code)}"><b>${esc(s.student_name)}</b>
+          <span class="muted">${esc(s.class_name)} · ${esc(s.member_code)}${s.student_no?' · '+esc(s.student_no):''}</span></div>`).join('')
+          || `<p class="muted">${noCode?'이 분원 명단에 회원코드가 없어요. 회원코드 열이 있는 명단을 올려주세요.':list.length?'검색 결과가 없어요.':'학생 명단을 먼저 올려주세요.'}</p>`}
+      </div>
+    </div>
+    <div class="card" id="hBody">${histCode?'<p class="muted">불러오는 중…</p>':'<p class="muted">왼쪽에서 학생을 고르세요.</p>'}</div>
+  </div>`;
+  $('#hBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderHistTab(); };
+  const hq=$('#hQ');
+  hq.oninput=()=>{ histQ=hq.value; renderHistTab().then(()=>{ const n=$('#hQ'); n.focus(); n.setSelectionRange(n.value.length,n.value.length); }); };
+  hq.onkeydown=e=>{ if(e.key==='Enter' && hq.value.trim()){ const v=hq.value.trim(); const one=found.length===1?found[0].member_code:v; histCode=one; renderHistTab(); } };
+  document.querySelectorAll('#tab-hist [data-code]').forEach(el=>el.onclick=()=>{ histCode=el.dataset.code; renderHistTab(); });
+  if(histCode) renderHistBody(histCode, list);
+}
+
+async function renderHistBody(code, list){
+  const box=$('#hBody'); if(!box) return;
+  let rs; try{ rs=await DB.responsesByMember(code); }catch(e){ box.innerHTML='<p class="muted">기록을 불러오지 못했습니다: '+esc(e.message)+'</p>'; return; }
+  const rows=[];
+  for(const r of rs){
+    const ex=examById(r.exam_id); if(!ex) continue;
+    const all=await getResponses(ex.id);
+    const brs=all.filter(x=>x.branch===r.branch);
+    rows.push({r, ex, all, date:ex.exam_date||String(r.created_at||'').slice(0,10), tp:totalPoints(ex),
+      rankBr:[...brs].sort((a,b)=>b.score-a.score).findIndex(x=>x.score===r.score)+1, nBr:brs.length,
+      avgBr:brs.reduce((s,x)=>s+x.score,0)/(brs.length||1), cs:catScores(ex,r.answers)});
+  }
+  rows.sort((a,b)=>koCmp(a.date,b.date));
+  const stu=list.find(s=>s.member_code===code), last=rows.length?rows[rows.length-1].r:null;
+  const name=stu?stu.student_name:(last?last.student_name:'');
+  const head=`<div class="row" style="justify-content:space-between"><div><h2 style="margin:0">${esc(name||'(이름 없음)')}
+      <span class="muted">${esc(stu?stu.class_name:(last?last.class_name:''))} · 회원코드 ${esc(code)}${stu&&stu.student_no?' · '+esc(stu.student_no):''}</span></h2></div></div>`;
+  if(!rows.length){ box.innerHTML=head+'<p class="muted" style="margin-top:12px">이 회원코드로 입력된 시험이 아직 없어요.</p>'; return; }
+
+  // 점수 추이 (100점 환산) — 내 점수 실선, 분원 평균 점선
+  const W=600,H=200,L=40,Rp=20,T=20,B=40, n=rows.length;
+  const X=i=> n===1 ? (L+W-Rp)/2 : L+i*(W-L-Rp)/(n-1);
+  const Y=v=> T+(1-v/100)*(H-T-B);
+  const my=rows.map(o=>o.r.score/o.tp*100), av=rows.map(o=>o.avgBr/o.tp*100);
+  const line=(vals,attr)=>`<polyline fill="none" ${attr} points="${vals.map((v,i)=>X(i)+','+Y(v)).join(' ')}"/>`;
+  const chart=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:760px;margin:14px 0 4px">
+    ${[0,50,100].map(v=>`<line x1="${L}" x2="${W-Rp}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e6e8ec"/><text x="${L-8}" y="${Y(v)+4}" font-size="11" text-anchor="end" fill="#6b7280">${v}</text>`).join('')}
+    ${line(av,'stroke="#9ca3af" stroke-width="2" stroke-dasharray="5 4"')}
+    ${line(my,'stroke="var(--main)" stroke-width="2.5"')}
+    ${rows.map((o,i)=>`<circle cx="${X(i)}" cy="${Y(my[i])}" r="4" fill="var(--main)"/><text x="${X(i)}" y="${Y(my[i])-9}" font-size="12" font-weight="700" text-anchor="middle" fill="#1f2430">${o.r.score}</text>
+      <text x="${X(i)}" y="${H-B+18}" font-size="11" text-anchor="middle" fill="#6b7280">${esc(o.date.slice(5)||'-')}</text>`).join('')}
+  </svg><div class="muted">— 내 점수 · - - 분원 평균 (100점 환산)</div>`;
+
+  // 시험별 표
+  const cats=[...new Set(rows.flatMap(o=>Object.keys(o.cs)))].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
+  const table=`<h3>시험별 기록</h3><div style="overflow:auto"><table><thead><tr><th>시행일</th><th>시험</th><th>점수</th><th>분원 평균</th><th>분원 석차</th>${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((o,i)=>`<tr class="click" data-hrep="${i}"><td>${esc(o.date||'-')}</td><td>${esc(o.ex.name)}</td><td><b>${o.r.score}</b><span class="muted">/${o.tp}</span></td><td>${o.avgBr.toFixed(1)}</td><td>${o.rankBr}/${o.nBr}</td>
+      ${cats.map(c=>o.cs[c]?`<td>${pct(o.cs[c].ok,o.cs[c].n)}%</td>`:'<td class="muted">-</td>').join('')}</tr>`).join('')}
+  </tbody></table></div><p class="muted">시험을 누르면 그 시험의 개인 리포트가 열립니다.</p>`;
+
+  // 누적 세부 유형 정답률 (낮은 순)
+  const agg={};
+  rows.forEach(o=>o.ex.items.forEach((it,i)=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); const a=agg[k]=agg[k]||{cat:it.cat||'미지정',sub:it.sub||'',ok:0,n:0}; a.n++; if(+o.r.answers[i]===+it.answer) a.ok++; }));
+  const subs=Object.values(agg).sort((a,b)=>pct(a.ok,a.n)-pct(b.ok,b.n)||b.n-a.n);
+  const weak=`<h3>누적 세부 유형별 정답률 (낮은 순)</h3>
+    <div class="cat-bars">${subs.map(a=>{ const v=pct(a.ok,a.n); return `<div class="cat-bar"><div class="row" style="justify-content:space-between">${pill(a.cat)}<span><b>${a.ok}/${a.n}</b></span></div>
+      <div style="margin-top:6px;font-weight:600">${esc(a.sub||'-')}</div>
+      <div class="bar"><i style="width:${v}%;background:${v<50?'var(--bad)':v<80?'var(--warn)':'var(--ok)'}"></i></div><div class="muted" style="margin-top:4px">${v}%</div></div>`; }).join('')}</div>`;
+
+  box.innerHTML=head+chart+table+weak;
+  box.querySelectorAll('[data-hrep]').forEach(tr=>tr.onclick=()=>{ const o=rows[+tr.dataset.hrep]; openReport(o.ex,o.r,o.all); });
+}
+
+/* ===================== 시작 ===================== */
+(async()=>{
+  const m=$('#mode');
+  if(sb){ m.textContent='Supabase 연결됨'; m.classList.add('on'); } else { m.textContent='로컬 테스트 모드 (이 브라우저에만 저장)'; }
+  await loadExams(); renderExamTab();
+})();
+</script>
+</body>
+</html>
