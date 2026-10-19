@@ -29,7 +29,7 @@ main{padding:20px 24px;max-width:1500px;margin:0 auto}
 .grid2{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
 @media(max-width:900px){.grid2{grid-template-columns:1fr}}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}
-input,select{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text)}
+input,select,textarea{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--text)}
 input:focus,select:focus{outline:2px solid var(--main-soft);border-color:var(--main)}
 button.btn{font:inherit;font-weight:600;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer}
 button.btn.primary{background:var(--main);border-color:var(--main);color:#fff}
@@ -337,6 +337,11 @@ function editorHtml(){
     <label class="f">시행일<input id="exDate" type="date" value="${esc(e.exam_date)}"></label>
     <label class="f">문항 수<input id="exQ" type="number" min="1" max="100" value="${e.q_count}" style="width:80px"></label>
   </div>
+  <details id="pasteBox" style="margin-top:16px" ${e._new?'open':''}>
+    <summary style="cursor:pointer;font-weight:700">시험 정보 한 번에 붙여넣기</summary>
+    <textarea id="pasteTxt" rows="9" style="width:100%;margin-top:8px;font-family:ui-monospace,Consolas,monospace;font-size:13px" placeholder="받은 시험 정보를 그대로 붙여넣으세요.&#10;시험명: …&#10;학년: 고1&#10;시행일: 2026-10-18&#10;정답: 2254131454…&#10;3점: 6, 13, 14, …&#10;유형:&#10;28 세부정보 안내문 일치"></textarea>
+    <div class="row" style="margin-top:6px"><button class="btn primary" id="applyPaste">적용</button><span class="muted">적용 후 아래 표를 확인하고 저장하세요. 유형은 적힌 번호만 바뀌고 나머지는 그대로 둡니다.</span></div>
+  </details>
   <h3>일괄 입력</h3>
   <div class="row">
     <label class="f" style="flex:1;min-width:300px">정답 (번호 순서대로 숫자만)<input id="bulkAns" class="omr-input" style="font-size:15px;letter-spacing:2px" value="${ansStr}"></label>
@@ -367,6 +372,31 @@ function editorHtml(){
   <div id="fileBox">${sb? (e._new?'<p class="muted">시험을 먼저 저장하면 파일을 올릴 수 있습니다.</p>':'<p class="muted">불러오는 중…</p>') : '<p class="muted">파일 보관은 Supabase 연결 후 사용할 수 있습니다.</p>'}</div>`;
 }
 
+/* 붙여넣기 형식 해석: '키: 값' 줄 + '번호 대분류 세부유형' 줄 */
+function parseExamText(t){
+  t=String(t||'').replace(/[①②③④⑤]/g,c=>'①②③④⑤'.indexOf(c)+1);
+  const out={types:{}};
+  t.split(/\r?\n/).forEach(raw=>{
+    const line=raw.trim(); if(!line) return;
+    let m=line.match(/^(시험\s*명|학년|시행\s*일|문항\s*수|정답|3점(?:\s*문항)?|유형)\s*[:：]\s*(.*)$/);
+    if(m){
+      const k=m[1].replace(/\s/g,''), v=m[2].trim();
+      if(k==='시험명') out.name=v;
+      else if(k==='학년') out.grade=v;
+      else if(k==='시행일'){ const d=v.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/); out.date=d?`${d[1]}-${d[2].padStart(2,'0')}-${d[3].padStart(2,'0')}`:''; }
+      else if(k==='문항수') out.q=+v.replace(/\D/g,'')||0;
+      else if(k==='정답') out.answers=v.replace(/[^0-5]/g,'');
+      else if(k.startsWith('3점')) out.three=v.split(/[^0-9]+/).filter(Boolean).map(Number);
+      return;
+    }
+    m=line.match(/^(\d{1,3})\s*[.|,\t ]?\s*(듣기|대의\s*파악|세부\s*정보|어법\s*[·ㆍ.\/]?\s*어휘|빈칸\s*추론|간접\s*쓰기|장문\s*독해)\s*[|,\t\/:-]*\s*(.*)$/);
+    if(m){
+      let cat=m[2].replace(/\s/g,''); if(/^어법/.test(cat)) cat='어법·어휘';
+      out.types[+m[1]]={cat, sub:m[3].trim()};
+    }
+  });
+  return out;
+}
 function syncEditorFields(){
   editing.name=$('#exName').value.trim(); editing.grade=$('#exGrade').value.trim(); editing.exam_date=$('#exDate').value;
 }
@@ -378,6 +408,26 @@ function bindEditor(){
     const old=e.items; e.q_count=n;
     e.items=Array.from({length:n},(_,i)=>old[i]||{no:i+1,answer:0,points:2,cat:'',sub:''});
     renderExamTab();
+  };
+  $('#applyPaste').onclick=()=>{
+    syncEditorFields();
+    const d=parseExamText($('#pasteTxt').value);
+    const nTypes=Object.keys(d.types).length;
+    if(!d.name && !d.answers && !d.three && !nTypes) return alert('인식된 내용이 없습니다. 받은 형식 그대로 붙여넣었는지 확인하세요.');
+    const n=d.q || (d.answers&&d.answers.length) || e.q_count;
+    if(n!==e.q_count){
+      const old=e.items; e.q_count=n;
+      e.items=Array.from({length:n},(_,i)=>old[i]||{no:i+1,answer:0,points:2,cat:'',sub:''});
+    }
+    if(d.name) e.name=d.name;
+    if(d.grade) e.grade=d.grade;
+    if(d.date) e.exam_date=d.date;
+    if(d.answers) e.items.forEach((it,i)=>it.answer=+d.answers[i]||0);
+    if(d.three) e.items.forEach(it=>it.points=d.three.includes(it.no)?3:2);
+    let applied=0;
+    Object.entries(d.types).forEach(([no,t])=>{ const it=e.items[+no-1]; if(it){ it.cat=t.cat; if(t.sub) it.sub=t.sub; applied++; } });
+    renderExamTab();
+    alert(`적용했습니다.\n정답 ${d.answers?d.answers.length+'개':'변경 없음'} · 3점 ${d.three?d.three.length+'문항':'변경 없음'} · 유형 ${applied}문항 · 총점 ${totalPoints(e)}점\n표를 확인한 뒤 저장을 눌러주세요.`);
   };
   $('#applyAns').onclick=()=>{
     syncEditorFields();
@@ -735,7 +785,7 @@ async function renderResultTab(){
       <label class="f" style="flex:1;min-width:220px">시험<select id="resExam">${examOptions(ex.id)}</select></label>
       <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
       <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
-      <button class="btn" id="csvBtn" style="align-self:flex-end">CSV 내보내기</button>
+      <button class="btn" id="csvBtn" style="align-self:flex-end">엑셀 다운로드</button>
     </div>
     <div class="stats">
       <div class="stat"><span class="muted">응시자</span><b>${rs.length}명</b></div>
@@ -815,7 +865,26 @@ function openReport(ex, r, all){
 }
 $('#modalBg').onclick=e=>{ if(e.target.id==='modalBg') e.currentTarget.classList.remove('show'); };
 
+/* 엑셀(.xlsx): 성적 / 답안 / 채점 / 문항분석 4개 시트. 엑셀 도구가 없으면 CSV로 */
 function exportCsv(ex, rows, cats){
+  if(window.XLSX){
+    const info=[ex.name, ex.grade||'', ex.exam_date||'', '분원: '+resBranch];
+    const rank=s=>rows.findIndex(r=>r.score===s)+1;
+    const nums=ex.items.map(i=>i.no+'번');
+    const s1=[info,[],['순위','회원코드','분원','반','이름','총점',...cats.map(c=>c+' 득점'),...cats.map(c=>c+' 정답률(%)')],
+      ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [rank(r.score),r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...cats.map(c=>pct(cs[c].ok,cs[c].n))]; })];
+    const s2=[info,[],['회원코드','분원','반','이름',...nums],['','','','정답',...ex.items.map(i=>+i.answer||'')],
+      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,...ex.items.map((it,i)=>+r.answers[i]||'')])];
+    const s3=[info,[],['회원코드','분원','반','이름','총점',...nums],['','','','배점','',...ex.items.map(i=>+i.points)],
+      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...ex.items.map((it,i)=>+r.answers[i]===+it.answer?'O':'X')])];
+    const wr=wrongRates(ex,rows);
+    const s4=[info,[],['번호','대분류','세부 유형','정답','배점','오답률(%)','①(%)','②(%)','③(%)','④(%)','⑤(%)','무응답(%)'],
+      ...ex.items.map((it,i)=>{ const c=[0,0,0,0,0,0]; rows.forEach(r=>c[+r.answers[i]||0]++); return [it.no,it.cat||'',it.sub||'',+it.answer||'',+it.points,wr[i]==null?'':wr[i],...[1,2,3,4,5,0].map(n=>pct(c[n],rows.length))]; })];
+    const wb=XLSX.utils.book_new();
+    [['성적',s1],['답안',s2],['채점',s3],['문항분석',s4]].forEach(([n,a])=>XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(a),n));
+    XLSX.writeFile(wb, `${ex.name}_${resBranch}.xlsx`.replace(/[\\/:*?"<>|]/g,'_'));
+    return;
+  }
   const head=['회원코드','분원','반','이름','총점',...cats.map(c=>c+'(득점)'),...ex.items.map(i=>i.no+'번')];
   const lines=[head, ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...ex.items.map((it,i)=>{ const a=+r.answers[i]||0; return a===+it.answer?'O':(a||'-'); })]; })];
   const csv='\uFEFF'+lines.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
