@@ -240,9 +240,16 @@ const totalPoints = ex => ex.items.reduce((s,it)=>s+(+it.points||0),0);
 const prefs = LS.get('mx_prefs',{branch:'남동탄',threshold:30});
 const savePrefs = () => LS.set('mx_prefs',prefs);
 
+/* 문항 하나 정답 여부. 본사 정오표로 가져온 시험은 답 대신 'o'(정답)/'x'(오답)로 저장됨 */
+function isOk(ch, it){
+  if(ch==='o') return true;
+  if(ch===undefined || ch==='x') return false;
+  return +it.answer>0 && +ch===+it.answer;
+}
+const oxOnly = ex => ex.items.every(i=>!+i.answer);   // 정답 번호 없이 정오(O/X)만 있는 시험
 function gradeAnswers(ex, answers){
   let score=0, correct=0;
-  ex.items.forEach((it,i)=>{ if(+answers[i]===+it.answer){ score+=+it.points; correct++; } });
+  ex.items.forEach((it,i)=>{ if(isOk(answers[i],it)){ score+=+it.points; correct++; } });
   return {score,correct};
 }
 function makeItems(n, answers='', three=[], useStd=false){
@@ -310,20 +317,22 @@ function renderExamTab(){
     <div class="card">
       <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">시험 목록</h2>
         <button class="btn sm primary" id="newExam">+ 새 시험</button></div>
+      <button class="btn sm" id="impOpen" style="width:100%;margin-bottom:10px">본사 리포트 가져오기</button>
       ${hasPreset?'':`<button class="btn sm" id="presetExam" style="width:100%;margin-bottom:10px">이번 시험(THE PREMIUM 고1) 등록</button>`}
       ${EXAMS.length? EXAMS.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}">
         <b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} ${esc(e.exam_date||'')} · ${e.q_count}문항 · ${totalPoints(e)}점</span></div>`).join('')
         : '<p class="muted">등록된 시험이 없습니다.</p>'}
     </div>
-    <div class="card" id="examEditor">${editing? editorHtml() : '<p class="muted">왼쪽에서 시험을 선택하거나 새로 만드세요.</p>'}</div>
+    <div class="card" id="examEditor">${importMode? importHtml() : editing? editorHtml() : '<p class="muted">왼쪽에서 시험을 선택하거나 새로 만드세요.</p>'}</div>
   </div>`;
-  $('#newExam').onclick=()=>{ editing={id:uid(),name:'',grade:'',exam_date:'',q_count:45,items:makeItems(45,'',[],true),_new:true}; renderExamTab(); };
-  const p=$('#presetExam'); if(p) p.onclick=()=>{
+  $('#impOpen').onclick=()=>{ importMode=true; IMP=null; editing=null; renderExamTab(); };
+  $('#newExam').onclick=()=>{ importMode=false; editing={id:uid(),name:'',grade:'',exam_date:'',q_count:45,items:makeItems(45,'',[],true),_new:true}; renderExamTab(); };
+  const p=$('#presetExam'); if(p) p.onclick=()=>{ importMode=false;
     editing={id:uid(),name:PRESET.name,grade:PRESET.grade,exam_date:'',q_count:45,items:makeItems(45,PRESET.answers,PRESET.three,true),_new:true};
     renderExamTab();
   };
-  document.querySelectorAll('.exam-item').forEach(el=>el.onclick=()=>{ editing=JSON.parse(JSON.stringify(examById(el.dataset.id))); renderExamTab(); });
-  if(editing) bindEditor();
+  document.querySelectorAll('.exam-item').forEach(el=>el.onclick=()=>{ importMode=false; editing=JSON.parse(JSON.stringify(examById(el.dataset.id))); renderExamTab(); });
+  if(importMode) bindImport(); else if(editing) bindEditor();
 }
 
 function editorHtml(){
@@ -455,7 +464,7 @@ function bindEditor(){
     if(!e.name) return alert('시험명을 입력하세요.');
     const tp=totalPoints(e);
     if(tp!==100 && !confirm(`총점이 ${tp}점입니다. 그래도 저장할까요?`)) return;
-    if(e.items.some(i=>!i.answer) && !confirm('정답이 비어 있는 문항이 있습니다. 그래도 저장할까요?')) return;
+    if(!oxOnly(e) && e.items.some(i=>!i.answer) && !confirm('정답이 비어 있는 문항이 있습니다. 그래도 저장할까요?')) return;
     const rec={id:e.id,name:e.name,grade:e.grade,exam_date:e.exam_date||null,q_count:e.q_count,items:e.items};
     if(!sb) rec.created_at = e.created_at || nowIso();
     try{
@@ -493,6 +502,168 @@ async function renderFiles(){
     const f=fs.find(x=>x.id===b.dataset.del); if(!confirm(`${f.file_name} 파일을 삭제할까요?`)) return;
     try{ await DB.deleteFile(f); }catch(err){ alert('삭제 실패: '+err.message); } renderFiles();
   });
+}
+
+/* ===================== 본사 리포트(달성율 현황 HTML) 가져오기 ===================== */
+let importMode=false, IMP=null;
+const STD_THREE=[6,13,14,21,30,33,34,37,39,42];
+
+// 리포트 HTML 안의 `const 이름 = {...}` 데이터를 꺼냄 (문자열 안 괄호는 무시)
+function extractConst(src,name){
+  const m=new RegExp('const\\s+'+name+'\\s*=\\s*').exec(src); if(!m) return undefined;
+  let i=m.index+m[0].length; const open=src[i];
+  if(open==='"'){ const e=src.indexOf('"',i+1); return JSON.parse(src.slice(i,e+1)); }
+  if(open!=='[' && open!=='{') return undefined;
+  let depth=0, inStr=false, j=i;
+  for(; j<src.length; j++){
+    const c=src[j];
+    if(inStr){ if(c==='\\') j++; else if(c==='"') inStr=false; continue; }
+    if(c==='"') inStr=true;
+    else if(c==='['||c==='{') depth++;
+    else if(c===']'||c==='}'){ depth--; if(!depth) break; }
+  }
+  try{ return JSON.parse(src.slice(i,j+1)); }catch(e){ return undefined; }
+}
+
+// 본사 점수(듣기·독해)로 3점 문항 추정: 듣기 17문항 중 3개, 독해 28문항 중 7개
+function combos(n,k,cb){ const a=[]; (function rec(s){ if(a.length===k){ cb(a); return; } for(let i=s;i<=n-(k-a.length);i++){ a.push(i); rec(i+1); a.pop(); } })(0); }
+function solvePart(rows, from, len, k, key){
+  const need=rows.map(r=>r[key]-2*r.answers.slice(from,from+len).filter(Boolean).length);
+  const out=[];
+  combos(len,k,c=>{ if(out.length>5000) return;
+    for(let s=0;s<rows.length;s++){ let n=0; for(const q of c) if(rows[s].answers[from+q]) n++; if(n!==need[s]) return; }
+    out.push(c.map(q=>q+from+1));
+  });
+  return out;
+}
+function inferThree(rows, prior){
+  const ok=rows.filter(r=>Number.isFinite(r.lc)&&Number.isFinite(r.rc));
+  if(!ok.length) return {three:prior, unique:false, found:false};
+  const L=solvePart(ok,0,17,3,'lc'), R=solvePart(ok,17,28,7,'rc');
+  if(!L.length||!R.length) return {three:prior, unique:false, found:false};
+  const best=list=>list.reduce((b,c)=>{ const sc=c.filter(q=>prior.includes(q)).length; return sc>b.sc?{c,sc}:b; },{c:list[0],sc:-1}).c;
+  return {three:[...best(L),...best(R)].sort((a,b)=>a-b), unique:L.length===1&&R.length===1, found:true};
+}
+
+function parseReport(src){
+  const J=extractConst(src,'JEONGO_DATA');
+  if(!J || typeof J!=='object') throw new Error('이 파일에서 학생별 정오표(JEONGO_DATA)를 찾지 못했어요. 본사 달성율 현황 HTML이 맞는지 확인해 주세요.');
+  const S=extractConst(src,'STUDENTS')||[];
+  const P=extractConst(src,'PERIOD_INFO')||{};
+  const branch=matchBranch(extractConst(src,'BRANCH_NAME')||prefs.branch);
+  const cats={};
+  const tg=src.match(/const\s+TYPE_GROUPS\s*=\s*\[([\s\S]*?)\];/);
+  if(tg) for(const m of tg[1].matchAll(/name:'([^']+)'[^}]*?qs:\[([\d,\s]+)\]/g)) m[2].split(',').map(Number).forEach(q=>cats[q]=m[1]);
+  const month=((P.label||'').match(/(\d{1,2})월/)||[])[1];
+  const grades={};
+  Object.entries(J).forEach(([g,list])=>{
+    if(!Array.isArray(list)||!list.length) return;
+    const st=S.filter(x=>x.t===g), courses=[];
+    st.forEach(x=>{ if(!courses.includes(x.c)) courses.push(x.c); });
+    const rows=list.map(x=>{
+      const course=courses[(+x.cls||0)-1]||'';
+      const sc=st.find(y=>y.c===course && String(y.num)===String(x.num));
+      return {name:String(x.name||'').trim(), num:String(x.num||''), cls:String(x.cls||''), course,
+        answers:(x.answers||[]).map(Boolean), total:sc?+sc.total:NaN, lc:sc?+sc.lc:NaN, rc:sc?+sc.rc:NaN, match:null, note:''};
+    });
+    grades[g]={rows, missing:Math.max(0, st.length-rows.length), three:[], unique:false, found:false};
+  });
+  if(!Object.keys(grades).length) throw new Error('정오표에 학생 데이터가 없어요.');
+  return {branch, year:P.year||'', label:P.label||'', month:month?month.padStart(2,'0'):'', cats, grades};
+}
+
+async function prepareImport(src){
+  const d=parseReport(src);
+  // 3점 추정: 정답이 하나로 정해지는 학년을 먼저 풀고, 그 결과를 다른 학년의 기준으로 사용
+  const order=Object.keys(d.grades).sort((a,b)=>d.grades[b].rows.length-d.grades[a].rows.length);
+  let prior=STD_THREE;
+  for(const g of order){ const r=inferThree(d.grades[g].rows, prior); Object.assign(d.grades[g],r); if(r.unique) prior=r.three; }
+  // 학생 명단과 이름으로 연결 → 회원코드
+  const roster=await getStudents(d.branch, true);
+  Object.entries(d.grades).forEach(([g,G])=>G.rows.forEach(r=>{
+    let c=roster.filter(s=>s.student_name===r.name);
+    if(c.length>1) c=c.filter(s=>!s.grade || normGrade(s.grade)===g);
+    if(c.length>1){ const byNo=c.filter(s=>String(s.student_no||'')===r.num); if(byNo.length===1) c=byNo; }   // 동명이인은 번호로 구분
+    if(c.length===1) r.match=c[0];
+    else r.note = c.length ? '동명이인' : (roster.length ? '명단에 없음' : '');
+  }));
+  d.rosterSize=roster.length;
+  return d;
+}
+
+const impName=(d,g)=>`정상어학원 ${d.year}년 ${d.label} ${g}`.replace(/\s+/g,' ').trim();
+function impScore(G,r){ return r.answers.reduce((s,a,i)=>s+(a?(G.three.includes(i+1)?3:2):0),0); }
+
+function importHtml(){
+  const d=IMP;
+  if(!d) return `<h2>본사 리포트 가져오기</h2>
+    <p class="muted">본사에서 받는 "수능모 달성율 현황" HTML 파일을 올리면, 학년별 시험을 만들고 학생별 정오표를 그대로 넣어요.<br>
+    학생 명단의 이름으로 회원코드를 연결하니까, 명단을 먼저 올려두면 학생 기록에 누적돼요.</p>
+    <div class="row" style="margin-top:10px"><input type="file" id="impFile" accept=".html,.htm"><button class="btn" id="impCancel">닫기</button></div>`;
+  return `<h2>본사 리포트 가져오기</h2>
+    <p><b>${esc(d.year)}년 ${esc(d.label)}</b> · ${esc(d.branch)} ${d.rosterSize?`· 명단 ${d.rosterSize}명과 이름으로 연결`:'· <span class="total bad">이 분원 명단이 없어 회원코드 연결 없이 가져옵니다</span>'}</p>
+    <label class="f" style="max-width:200px">시행일<input type="date" id="impDate" value="${d.year&&d.month?`${d.year}-${d.month}-01`:''}"></label>
+    ${Object.entries(d.grades).map(([g,G])=>{
+      const linked=G.rows.filter(r=>r.match).length;
+      const withTotal=G.rows.filter(r=>Number.isFinite(r.total));
+      const same=withTotal.filter(r=>impScore(G,r)===r.total).length;
+      const unl=G.rows.filter(r=>!r.match);
+      return `<div class="card" style="margin-top:12px">
+        <div class="row" style="justify-content:space-between"><b>${esc(impName(d,g))}</b><span class="muted">${G.rows.length}명${G.missing?` · 정오표 없는 ${G.missing}명 제외`:''}</span></div>
+        <div class="row" style="margin-top:8px">
+          <label class="f" style="flex:1;min-width:260px">3점 문항 ${G.unique?'<span class="mark-o">(본사 점수로 확인됨)</span>':G.found?'<span class="mark-x">(추정 — 시험지로 확인해 주세요)</span>':'<span class="mark-x">(추정 불가 — 직접 입력)</span>'}
+            <input data-three="${esc(g)}" value="${G.three.join(', ')}"></label>
+          <div><span class="muted">본사 점수와 일치</span><br><b class="${withTotal.length&&same===withTotal.length?'mark-o':'mark-x'}">${withTotal.length?`${same}/${withTotal.length}명`:'비교 불가'}</b></div>
+          <div><span class="muted">회원코드 연결</span><br><b>${linked}/${G.rows.length}명</b></div>
+        </div>
+        ${unl.length&&d.rosterSize?`<p class="muted" style="margin-top:6px">연결 안 됨: ${unl.map(r=>esc(r.name)+(r.note?`(${r.note})`:'')).join(', ')}</p>`:''}
+      </div>`; }).join('')}
+    <p class="muted" style="margin-top:10px">본사 파일에는 학생이 고른 번호가 없고 정답/오답만 있어서, 이 시험은 선지 분포 없이 점수·유형 분석만 돼요. 같은 이름의 시험이 이미 있으면 그 시험의 답안을 새로 교체합니다.</p>
+    <div class="row" style="margin-top:10px"><button class="btn primary" id="impGo">가져오기</button><button class="btn" id="impCancel">취소</button></div>`;
+}
+
+function bindImport(){
+  const close=()=>{ importMode=false; IMP=null; renderExamTab(); };
+  $('#impCancel').onclick=close;
+  const f=$('#impFile'); if(f) f.onchange=async e=>{
+    const file=e.target.files[0]; if(!file) return;
+    try{ IMP=await prepareImport(await file.text()); renderExamTab(); }catch(err){ alert(err.message); }
+  };
+  document.querySelectorAll('[data-three]').forEach(inp=>inp.onchange=()=>{
+    const G=IMP.grades[inp.dataset.three];
+    G.three=inp.value.split(/[^0-9]+/).filter(Boolean).map(Number).filter(n=>n>=1&&n<=45);
+    G.unique=false; renderExamTab();
+  });
+  const go=$('#impGo'); if(go) go.onclick=async()=>{
+    const d=IMP, date=$('#impDate').value||null;
+    const names=Object.keys(d.grades).map(g=>impName(d,g));
+    const dupes=names.filter(n=>EXAMS.some(e=>e.name===n));
+    const bad=Object.entries(d.grades).filter(([g,G])=>G.three.length!==10).map(([g])=>g);
+    if(bad.length && !confirm(`${bad.join(', ')} 3점 문항이 10개가 아니에요. 그대로 가져올까요?`)) return;
+    if(dupes.length && !confirm(`이미 있는 시험: ${dupes.join(', ')}\n이 시험들의 답안을 새로 교체할까요?`)) return;
+    go.disabled=true; go.textContent='가져오는 중…';
+    try{
+      let n=0;
+      for(const [g,G] of Object.entries(d.grades)){
+        const name=impName(d,g), old=EXAMS.find(e=>e.name===name);
+        const items=STD_TYPES.map((t,i)=>{ const cat=d.cats[i+1]||t[0]; return {no:i+1, answer:0, points:G.three.includes(i+1)?3:2, cat, sub:cat===t[0]?t[1]:''}; });
+        const rec={id:old?old.id:uid(), name, grade:g, exam_date:date, q_count:45, items};
+        if(!sb) rec.created_at=(old&&old.created_at)||nowIso();
+        const ex=await DB.saveExam(rec);
+        if(old) for(const r of await getResponses(ex.id,true)) await DB.deleteResponse(r.id);
+        for(const r of G.rows){
+          const answers=r.answers.map(a=>a?'o':'x').join('');
+          const resp={id:uid(), exam_id:ex.id, branch:d.branch, class_name:r.match?r.match.class_name:r.course,
+            student_name:r.name||`${r.course} ${r.num}번`, member_code:r.match&&r.match.member_code||null, answers, score:gradeAnswers(ex,answers).score};
+          if(!sb) resp.created_at=nowIso();
+          await DB.saveResponse(resp); n++;
+        }
+        delete resCache[ex.id];
+      }
+      await loadExams(); importMode=false; IMP=null; renderExamTab();
+      alert(`가져왔어요. 시험 ${names.length}개 · 학생 답안 ${n}건\n결과·분석과 학생 기록에서 확인할 수 있어요.`);
+    }catch(err){ alert('가져오기 실패: '+err.message); go.disabled=false; go.textContent='가져오기'; }
+  };
 }
 
 /* ===================== 학생 명단 ===================== */
@@ -681,7 +852,7 @@ async function renderOmrTab(){
     const v=ans.value.replace(/[^0-5]/g,''); if(v!==ans.value) ans.value=v;
     const g=gradeAnswers(ex,v); $('#omrScore').textContent=g.score; $('#omrCnt').textContent=v.length;
     $('#omrGrid').innerHTML=ex.items.map((it,i)=>{
-      const a=v[i]; const cls = a===undefined?'':(+a===+it.answer?'o':'x');
+      const a=v[i]; const cls = a===undefined?'':(isOk(a,it)?'o':'x');
       return `<div class="omr-cell ${cls} ${i===v.length?'cur':''}" title="${esc(it.cat+' '+it.sub)}"><div class="n">${it.no}</div><div class="a">${a===undefined?'':(a==='0'?'·':a)}</div></div>`;
     }).join('');
   };
@@ -751,17 +922,21 @@ async function saveOmr(ex, onSaved){
 }
 
 /* ===================== 3. 결과·분석 ===================== */
-let resSub='students', resBranch='전체';
+let resSub='students', resBranch='전체', resCmp={};   // resCmp[시험id] = 비교할 시험 id ('' = 비교 안 함)
+const examDateKey = e => (e.exam_date||String(e.created_at||'').slice(0,10)||'');
+function cmpCandidates(ex){ const g=normGrade(ex.grade); return EXAMS.filter(e=>e.id!==ex.id && (!g || normGrade(e.grade)===g)).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
+function defaultCmp(ex){ const k=examDateKey(ex); const c=cmpCandidates(ex).find(e=>examDateKey(e)<k); return c?c.id:''; }
+const sameResp = (a,b) => (a.member_code && b.member_code) ? a.member_code===b.member_code : (a.branch===b.branch && a.student_name===b.student_name);
 function wrongRates(ex, rs){
   return ex.items.map((it,i)=>{
     const n=rs.length; if(!n) return null;
-    const w=rs.filter(r=>+r.answers[i]!==+it.answer).length;
+    const w=rs.filter(r=>!isOk(r.answers[i],it)).length;
     return Math.round(w/n*100);
   });
 }
 function catScores(ex, answers){
   const m={};
-  ex.items.forEach((it,i)=>{ const c=it.cat||'미지정'; m[c]=m[c]||{got:0,max:0,ok:0,n:0}; m[c].max+=+it.points; m[c].n++; if(+answers[i]===+it.answer){ m[c].got+=+it.points; m[c].ok++; } });
+  ex.items.forEach((it,i)=>{ const c=it.cat||'미지정'; m[c]=m[c]||{got:0,max:0,ok:0,n:0}; m[c].max+=+it.points; m[c].n++; if(isOk(answers[i],it)){ m[c].got+=+it.points; m[c].ok++; } });
   return m;
 }
 const catsOf = ex => [...new Set(ex.items.map(i=>i.cat||'미지정'))].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
@@ -778,6 +953,17 @@ async function renderResultTab(){
   const sorted=[...rs].sort((a,b)=>b.score-a.score);
   const rankOf = s => sorted.findIndex(r=>r.score===s)+1;
   const wr=wrongRates(ex,rs);
+  // 지난 시험 비교 (같은 학년)
+  if(!(ex.id in resCmp)) resCmp[ex.id]=defaultCmp(ex);
+  const cmpEx=resCmp[ex.id]?examById(resCmp[ex.id]):null;
+  const cmpAll=cmpEx?await getResponses(cmpEx.id):[];
+  const cmpRs=resBranch==='전체'?cmpAll:cmpAll.filter(r=>r.branch===resBranch);
+  const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
+  const prevOf=r=>cmpRs.find(p=>sameResp(p,r));
+  const cmpAvg=cmpRs.length?cmpRs.reduce((a,r)=>a+r.score,0)/cmpRs.length:null;
+  const diffTag=d=>d==null?'<span class="muted">-</span>':`<b class="${d>0?'mark-o':d<0?'mark-x':''}">${d>0?'▲':d<0?'▼':''}${Math.abs(Math.round(d))}</b>`;
+  const catRate=(e,list)=>{ const m={}; list.forEach(r=>{ const cs=catScores(e,r.answers); Object.entries(cs).forEach(([c,v])=>{ m[c]=m[c]||{ok:0,n:0}; m[c].ok+=v.ok; m[c].n+=v.n; }); }); return m; };
+  const curCat=catRate(ex,rs), prevCat=cmpEx?catRate(cmpEx,cmpRs):{};
 
   $('#tab-result').innerHTML=`
   <div class="card">
@@ -785,6 +971,7 @@ async function renderResultTab(){
       <label class="f" style="flex:1;min-width:220px">시험<select id="resExam">${examOptions(ex.id)}</select></label>
       <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
       <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
+      <label class="f">지난 시험과 비교<select id="resCmp"><option value="">비교 안 함</option>${cmpCandidates(ex).map(e=>`<option value="${e.id}" ${cmpEx&&e.id===cmpEx.id?'selected':''}>${esc(e.name)}${e.exam_date?' ('+esc(e.exam_date)+')':''}</option>`).join('')}</select></label>
       <button class="btn" id="csvBtn" style="align-self:flex-end">엑셀 다운로드</button>
     </div>
     <div class="stats">
@@ -792,13 +979,21 @@ async function renderResultTab(){
       <div class="stat"><span class="muted">평균</span><b>${avg}</b></div>
       <div class="stat"><span class="muted">최고</span><b>${scores.length?Math.max(...scores):'-'}</b></div>
       <div class="stat"><span class="muted">최저</span><b>${scores.length?Math.min(...scores):'-'}</b></div>
+      ${cmpEx?`<div class="stat"><span class="muted">지난 시험 평균 (${cmpRs.length}명)</span><b>${cmpAvg==null?'-':cmpAvg.toFixed(1)}</b></div>
+      <div class="stat"><span class="muted">평균 변화</span><b>${cmpAvg==null||!scores.length?'-':diffTag(to100(+avg,ex)-to100(cmpAvg,cmpEx))}</b></div>`:''}
     </div>
+    ${cmpEx?`<div class="cat-bars" style="margin-top:0">${catsOf(ex).map(c=>{ const a=curCat[c], b=prevCat[c]; const cur=a?pct(a.ok,a.n):0, prev=b?pct(b.ok,b.n):null; return `
+      <div class="cat-bar"><div class="row" style="justify-content:space-between">${pill(c)}<span>${prev==null?'':`${prev}% → `}<b>${cur}%</b> ${prev==null?'':diffTag(cur-prev)}</span></div>
+        <div class="bar"><i style="width:${cur}%;background:${CAT_COLORS[c]||'#94a3b8'}"></i></div>
+        ${prev==null?'':`<div class="bar" style="margin-top:3px;height:5px"><i style="width:${prev}%;background:#cbd5e1"></i></div>`}</div>`; }).join('')}</div>
+      <p class="muted" style="margin:-8px 0 12px">유형별 정답률: 진한 막대 = 이번 시험, 회색 막대 = ${esc(cmpEx.name)}</p>`:''}
     <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button></div>
     <div style="overflow:auto">
     ${resSub==='students' ? `
-      <table><thead><tr><th>순위</th><th>분원</th><th>반</th><th>이름</th><th>총점</th>${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+      <table><thead><tr><th>순위</th><th>분원</th><th>반</th><th>이름</th><th>총점</th>${cmpEx?'<th>지난 시험</th><th>변화</th>':''}${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${sorted.map(r=>{ const cs=catScores(ex,r.answers); return `<tr class="click" data-rep="${r.id}"><td>${rankOf(r.score)}</td><td>${esc(r.branch)}</td><td>${esc(r.class_name)}</td><td><b>${esc(r.student_name)}</b></td><td><b>${r.score}</b></td>
-        ${cats.map(c=>`<td>${cs[c].got}/${cs[c].max}</td>`).join('')}</tr>`; }).join('') || `<tr><td colspan="${5+cats.length}" class="muted">응답이 없습니다.</td></tr>`}
+        ${cmpEx?(()=>{ const pv=prevOf(r); return pv?`<td>${pv.score}</td><td>${diffTag(to100(r.score,ex)-to100(pv.score,cmpEx))}</td>`:'<td class="muted">-</td><td class="muted">-</td>'; })():''}
+        ${cats.map(c=>`<td>${cs[c].got}/${cs[c].max}</td>`).join('')}</tr>`; }).join('') || `<tr><td colspan="${5+cats.length+(cmpEx?2:0)}" class="muted">응답이 없습니다.</td></tr>`}
       </tbody></table><p class="muted">학생을 클릭하면 개인 리포트가 열립니다.</p>`
     : `
       <table><thead><tr><th>번호</th><th>유형</th><th>세부</th><th>정답</th><th>배점</th><th>오답률</th><th>선지별 선택 비율 (①~⑤ / 무응답)</th></tr></thead><tbody>
@@ -806,13 +1001,14 @@ async function renderResultTab(){
         const cnt=[0,0,0,0,0,0]; rs.forEach(r=>{ const a=+r.answers[i]||0; cnt[a]++; });
         return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
           <td><b>${wr[i]==null?'-':wr[i]+'%'}</b></td>
-          <td><div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div></td></tr>`;
+          <td>${oxOnly(ex)?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr>`;
       }).join('')}
       </tbody></table>`}
     </div>
   </div>`;
   $('#resExam').onchange=e=>{ resExamId=e.target.value; renderResultTab(); };
   $('#resBranch').onchange=e=>{ resBranch=e.target.value; renderResultTab(); };
+  $('#resCmp').onchange=e=>{ resCmp[ex.id]=e.target.value; renderResultTab(); };
   $('#resTh').onchange=e=>{ prefs.threshold=+e.target.value||30; savePrefs(); };
   document.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{ resSub=b.dataset.sub; renderResultTab(); });
   document.querySelectorAll('[data-rep]').forEach(tr=>tr.onclick=()=>openReport(ex, all.find(r=>r.id===tr.dataset.rep), all));
@@ -833,10 +1029,10 @@ function openReport(ex, r, all){
     const items=ex.items.map((it,i)=>({it,i})).filter(o=>!(hideListen && o.it.cat==='듣기'));
     const half=Math.ceil(items.length/2);
     const rowHtml=({it,i})=>{
-      const a=+r.answers[i]||0, ok=a===+it.answer;
+      const a=+r.answers[i]||0, ok=isOk(r.answers[i],it), ox=r.answers[i]==='x';
       const ev= ok ? '<span class="tag ok">양호</span>' : (wrBr[i]!=null && wrBr[i]<th ? '<span class="tag bad">취약</span>' : '<span class="tag warn">주의</span>');
       return `<tr><td><span class="qno ${ok?'':'x'}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${wrAll[i]}%</td><td>${wrBr[i]}%</td>
-        <td>${ok?'<span class="mark-o">○ 정답</span>':`<span class="mark-x">✕ 오답</span> <span class="muted">(${a?circled(a):'무응답'})</span>`}</td><td>${ev}</td></tr>`;
+        <td>${ok?'<span class="mark-o">○ 정답</span>':`<span class="mark-x">✕ 오답</span>${ox?'':` <span class="muted">(${a?circled(a):'무응답'})</span>`}`}</td><td>${ev}</td></tr>`;
     };
     const tbl=(arr)=>`<table><thead><tr><th>문항 (${arr.length?arr[0].it.no:''}–${arr.length?arr[arr.length-1].it.no:''})</th><th>유형</th><th>전체 오답률</th><th>분원 오답률</th><th>내 응답</th><th>평가</th></tr></thead><tbody>${arr.map(rowHtml).join('')}</tbody></table>`;
     $('#modal').innerHTML=`
@@ -874,9 +1070,9 @@ function exportCsv(ex, rows, cats){
     const s1=[info,[],['순위','회원코드','분원','반','이름','총점',...cats.map(c=>c+' 득점'),...cats.map(c=>c+' 정답률(%)')],
       ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [rank(r.score),r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...cats.map(c=>pct(cs[c].ok,cs[c].n))]; })];
     const s2=[info,[],['회원코드','분원','반','이름',...nums],['','','','정답',...ex.items.map(i=>+i.answer||'')],
-      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,...ex.items.map((it,i)=>+r.answers[i]||'')])];
+      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,...ex.items.map((it,i)=>{ const ch=r.answers[i]; return ch==='o'?'O':ch==='x'?'X':(+ch||''); })])];
     const s3=[info,[],['회원코드','분원','반','이름','총점',...nums],['','','','배점','',...ex.items.map(i=>+i.points)],
-      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...ex.items.map((it,i)=>+r.answers[i]===+it.answer?'O':'X')])];
+      ...rows.map(r=>[r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...ex.items.map((it,i)=>isOk(r.answers[i],it)?'O':'X')])];
     const wr=wrongRates(ex,rows);
     const s4=[info,[],['번호','대분류','세부 유형','정답','배점','오답률(%)','①(%)','②(%)','③(%)','④(%)','⑤(%)','무응답(%)'],
       ...ex.items.map((it,i)=>{ const c=[0,0,0,0,0,0]; rows.forEach(r=>c[+r.answers[i]||0]++); return [it.no,it.cat||'',it.sub||'',+it.answer||'',+it.points,wr[i]==null?'':wr[i],...[1,2,3,4,5,0].map(n=>pct(c[n],rows.length))]; })];
@@ -886,7 +1082,7 @@ function exportCsv(ex, rows, cats){
     return;
   }
   const head=['회원코드','분원','반','이름','총점',...cats.map(c=>c+'(득점)'),...ex.items.map(i=>i.no+'번')];
-  const lines=[head, ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...ex.items.map((it,i)=>{ const a=+r.answers[i]||0; return a===+it.answer?'O':(a||'-'); })]; })];
+  const lines=[head, ...rows.map(r=>{ const cs=catScores(ex,r.answers); return [r.member_code||'',r.branch,r.class_name,r.student_name,r.score,...cats.map(c=>cs[c].got),...ex.items.map((it,i)=>{ const a=+r.answers[i]||0; return isOk(r.answers[i],it)?'O':(a||(r.answers[i]==='x'?'X':'-')); })]; })];
   const csv='\uFEFF'+lines.map(l=>l.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`${ex.name}_${resBranch}.csv`; a.click();
 }
@@ -961,7 +1157,7 @@ async function renderHistBody(code, list){
 
   // 누적 세부 유형 정답률 (낮은 순)
   const agg={};
-  rows.forEach(o=>o.ex.items.forEach((it,i)=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); const a=agg[k]=agg[k]||{cat:it.cat||'미지정',sub:it.sub||'',ok:0,n:0}; a.n++; if(+o.r.answers[i]===+it.answer) a.ok++; }));
+  rows.forEach(o=>o.ex.items.forEach((it,i)=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); const a=agg[k]=agg[k]||{cat:it.cat||'미지정',sub:it.sub||'',ok:0,n:0}; a.n++; if(isOk(o.r.answers[i],it)) a.ok++; }));
   const subs=Object.values(agg).sort((a,b)=>pct(a.ok,a.n)-pct(b.ok,b.n)||b.n-a.n);
   const weak=`<h3>누적 세부 유형별 정답률 (낮은 순)</h3>
     <div class="cat-bars">${subs.map(a=>{ const v=pct(a.ok,a.n); return `<div class="cat-bar"><div class="row" style="justify-content:space-between">${pill(a.cat)}<span><b>${a.ok}/${a.n}</b></span></div>
