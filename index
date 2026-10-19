@@ -123,8 +123,8 @@ tr.click{cursor:pointer} tr.click:hover td{background:#f8faff}
 
 <script>
 /* ===================== 설정 ===================== */
-const SUPABASE_URL = '';        // 예: https://xxxx.supabase.co
-const SUPABASE_ANON_KEY = '';   // anon public key
+const SUPABASE_URL = 'https://qprksmuivuknplzugfeg.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFwcmtzbXVpdnVrbnBsenVnZmVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5NzQwMzYsImV4cCI6MjEwNTU1MDAzNn0.lhFr6-1QsqOBbQV80FgM4ROKmP26gDj18s9G_8vvOcY';   // anon public key
 const FILE_BUCKET = 'exam-papers';
 const BRANCHES = ['남동탄','수원','장안','서수원','운정1','운정2'];
 
