@@ -97,6 +97,10 @@ tr.click{cursor:pointer} tr.click:hover td{background:#f8faff}
 .grid-cls td{padding:4px 6px}
 table.adm th,table.adm td{text-align:center;white-space:nowrap}
 table.adm td:first-child,table.adm th:first-child{text-align:left}
+table.adm .gc-n{color:#111827}
+table.adm .gc-p{background:#eef4ff;color:#1d4ed8}
+.stat.hl{background:#eef4ff;border-color:#1d4ed8}
+.stat.hl b{font-size:26px;color:#1d4ed8}
 .q-card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px}
 .q-card summary{cursor:pointer;color:var(--main);font-weight:600;margin-top:6px}
 .q-body{margin-top:8px;font-family:"Times New Roman",Pretendard,serif;font-size:14px;line-height:1.6}
@@ -1128,7 +1132,7 @@ async function renderResultTab(){
     </div>
     <div class="stats">
       <div class="stat"><span class="muted">응시자</span><b>${rs.length}명</b></div>
-      <div class="stat"><span class="muted">평균</span><b>${avg}</b></div>
+      <div class="stat hl"><span class="muted">이번 시험 평균</span><b>${avg}</b></div>
       <div class="stat"><span class="muted">최고</span><b>${scores.length?Math.max(...scores):'-'}</b></div>
       <div class="stat"><span class="muted">최저</span><b>${scores.length?Math.min(...scores):'-'}</b></div>
       ${cmpEx?`<div class="stat"><span class="muted">지난 시험 평균 (${cmpRs.length}명)</span><b>${cmpAvg==null?'-':cmpAvg.toFixed(1)}</b></div>
@@ -1340,10 +1344,10 @@ function admExamsOf(g, rk){ return EXAMS.filter(e=>normGrade(e.grade)===g && rou
 function gradeCounts(list, ex){ const c=[0,0,0,0,0]; list.forEach(r=>c[bucketOf(engGrade(r.score,ex))]++); return c; }
 // 행 하나: 응시 + 등급별 (인원 | %)
 function gradeRow(label, cnt, n, strong){
-  return `<tr${strong?' style="font-weight:700;background:#fafbfc"':''}><td>${label}</td><td>${n||'-'}</td>${cnt.map(v=>`<td>${n?v:'-'}</td><td class="muted">${n?pct(v,n)+'%':'-'}</td>`).join('')}</tr>`;
+  return `<tr${strong?' style="font-weight:700;background:#fafbfc"':''}><td>${label}</td><td>${n||'-'}</td>${cnt.map(v=>`<td class="gc-n">${n?v:'-'}</td><td class="gc-p">${n?pct(v,n)+'%':'-'}</td>`).join('')}</tr>`;
 }
 const gradeHead = first => `<thead><tr><th rowspan="2">${first}</th><th rowspan="2">응시</th>${GRADE_COLS.map(c=>`<th colspan="2" style="text-align:center">${c}</th>`).join('')}</tr>
-  <tr>${GRADE_COLS.map(()=>'<th>인원</th><th>%</th>').join('')}</tr></thead>`;
+  <tr>${GRADE_COLS.map(()=>'<th class="gc-n">인원</th><th class="gc-p">%</th>').join('')}</tr></thead>`;
 
 // 응답 → 현재 명단(반·담임) 연결
 function rosterOf(r, roster){
@@ -1379,8 +1383,8 @@ async function renderAdminTab(){
   const t2=BRANCHES.map(b=>{ const l=G.ex?G.all.filter(r=>r.branch===b):[]; return {b,cnt:G.ex?gradeCounts(l,G.ex):[0,0,0,0,0],n:l.length}; });
   const t2sum={cnt:G.ex?gradeCounts(G.all,G.ex):[0,0,0,0,0], n:G.all.length};
 
-  // ③ 오답률 TOP3 (선택 학년, 분원별 + 전체)
-  const top3=list=>{ if(!G.ex||!list.length) return []; const wr=wrongRates(G.ex,list); return G.ex.items.map((it,i)=>({it,w:wr[i]})).sort((a,b)=>b.w-a.w||a.it.no-b.it.no).slice(0,3); };
+  // ③ 오답률 TOP5 (선택 학년, 분원별 + 전체)
+  const top3=list=>{ if(!G.ex||!list.length) return []; const wr=wrongRates(G.ex,list); return G.ex.items.map((it,i)=>({it,w:wr[i]})).sort((a,b)=>b.w-a.w||a.it.no-b.it.no).slice(0,5); };
   const topCell=t=>t?`<b>${t.it.no}번</b> ${pill(t.it.cat)} <span class="muted">${esc(t.it.sub||'')}</span> <b class="mark-x">${t.w}%</b>`:'<span class="muted">-</span>';
   const topRows=[...BRANCHES.map(b=>({label:b,l:G.all.filter(r=>r.branch===b)})),{label:'전체',l:G.all,strong:true}].filter(x=>x.l.length||x.strong);
 
@@ -1447,9 +1451,9 @@ async function renderAdminTab(){
       ${gradeRow('전체',t2sum.cnt,t2sum.n,true)}
     </tbody></table></div>
 
-    <h3 style="margin-top:22px">오답률 TOP 3 · ${admGrade}</h3>
-    <div style="overflow:auto"><table><thead><tr><th>분원</th><th>응시</th><th>1위</th><th>2위</th><th>3위</th></tr></thead><tbody>
-      ${topRows.map(x=>{ const t=top3(x.l); return `<tr${x.strong?' style="font-weight:700;background:#fafbfc"':''}><td>${esc(x.label)}</td><td>${x.l.length}</td><td>${topCell(t[0])}</td><td>${topCell(t[1])}</td><td>${topCell(t[2])}</td></tr>`; }).join('')}
+    <h3 style="margin-top:22px">오답률 TOP 5 · ${admGrade}</h3>
+    <div style="overflow:auto"><table><thead><tr><th>분원</th><th>응시</th><th>1위</th><th>2위</th><th>3위</th><th>4위</th><th>5위</th></tr></thead><tbody>
+      ${topRows.map(x=>{ const t=top3(x.l); return `<tr${x.strong?' style="font-weight:700;background:#fafbfc"':''}><td>${esc(x.label)}</td><td>${x.l.length}</td>${[0,1,2,3,4].map(i=>`<td>${topCell(t[i])}</td>`).join('')}</tr>`; }).join('')}
     </tbody></table></div>
   </div>
 
@@ -1662,29 +1666,58 @@ async function openWorksheet(name, code, rows){
   }
   const keyOrder=Object.keys(weakSubs).sort((a,b)=>weakSubs[b]-weakSubs[a]);
   const listen=k=>k.startsWith('듣기|');
-  const row=(x,j,pre,checked)=>`<div class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${checked?'checked':''}> <span class="ws-prev" data-prev="${pre}${j}" title="눌러서 문제 미리 보기">${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번 ▾</span></span></div><div class="ws-pv" id="pv-${pre}${j}" hidden></div>`;
-  const section=(list,pre,defChecked)=>keyOrder.filter(k=>list.some(x=>x.key===k)).map(k=>`<div class="ws-grp"><div class="muted" style="font-weight:700">${esc(k.replace('|',' · '))} <span>(누적 오답 ${weakSubs[k]})</span></div>${list.map((x,j)=>x.key===k?row(x,j,pre,defChecked&&!listen(k)):'').join('')}</div>`).join('');
+  const all={w:wrong,s:similar};
+  const sel=new Set(); wrong.forEach((x,j)=>{ if(!listen(x.key)) sel.add('w'+j); });   // 기본: 틀린 문제(듣기 제외)
+  // 필터: 회차(최근 N회차) · 비슷한 문제 학년
+  const roundsDesc=[...new Set(EXAMS.map(roundKey))].sort((a,b)=>koCmp(b,a));
+  const lastEx=rows.slice().sort((a,b)=>koCmp(examDateKey(b.ex),examDateKey(a.ex)))[0];
+  const myGrade=lastEx?normGrade(lastEx.ex.grade):'';
+  const simGrades=[...new Set(similar.map(x=>normGrade(x.ex.grade)))].sort(koCmp);
+  const gradeSel=new Set(simGrades.includes(myGrade)?[myGrade]:simGrades);
+  let recentN=0;   // 0 = 전체 회차
+  const passRound=x=>!recentN || roundsDesc.slice(0,recentN).includes(roundKey(x.ex));
+  const visible=(pre,x)=>passRound(x) && (pre!=='s' || gradeSel.has(normGrade(x.ex.grade)));
+  const row=(x,j,pre)=>`<div class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${sel.has(pre+j)?'checked':''}> <span class="ws-prev" data-prev="${pre}${j}" title="눌러서 문제 미리 보기">${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번 ▾</span></span></div><div class="ws-pv" id="pv-${pre}${j}" hidden></div>`;
+  const section=(list,pre)=>keyOrder.filter(k=>list.some((x,j)=>x.key===k && visible(pre,x))).map(k=>`<div class="ws-grp"><div class="muted" style="font-weight:700">${esc(k.replace('|',' · '))} <span>(누적 오답 ${weakSubs[k]})</span></div>${list.map((x,j)=>x.key===k&&visible(pre,x)?row(x,j,pre):'').join('')}</div>`).join('');
+  const allBox=(pre)=>`<label class="ws-item" style="cursor:pointer;font-weight:700"><input type="checkbox" data-wsall="${pre}"> 전체 선택</label>`;
   $('#wsBody').innerHTML=`
     <label class="f" style="margin:10px 0">문제지 제목<input id="wsTitle" value="${esc(name)} 모의고사 대비 오답 문제지"></label>
+    <div class="row" style="gap:16px;align-items:flex-end;margin-bottom:6px">
+      <label class="f">회차 범위<select id="wsRecent"><option value="0">전체 회차</option>${[1,2,3,4,5,6,8].filter(n=>n<roundsDesc.length).map(n=>`<option value="${n}">최근 ${n}회차</option>`).join('')}</select></label>
+      ${simGrades.length?`<div class="f"><span>비슷한 문제 학년</span><div class="row" style="gap:10px">${simGrades.map(g=>`<label class="ws-item" style="cursor:pointer"><input type="checkbox" data-wsg="${g}" ${gradeSel.has(g)?'checked':''}> ${g}</label>`).join('')}</div></div>`:''}
+    </div>
     <div class="row" style="align-items:flex-start;gap:16px">
-      <div style="flex:1;min-width:300px"><h3>틀렸던 문제 (${wrong.length})</h3>${wrong.length?section(wrong,'w',true):'<p class="muted">시험지 워드가 등록된 시험에서 틀린 문제가 없어요.</p>'}</div>
-      <div style="flex:1;min-width:300px"><h3>안 본 시험의 비슷한 문제 (${similar.length})</h3>${similar.length?section(similar,'s',false):'<p class="muted">같은 유형이 있는, 이 학생이 안 본 시험(워드 등록)이 없어요.</p>'}</div>
+      <div style="flex:1;min-width:300px"><h3 id="wsHw"></h3><div id="wsListW"></div></div>
+      <div style="flex:1;min-width:300px"><h3 id="wsHs"></h3><div id="wsListS"></div></div>
     </div>
     <p class="muted">듣기 문항은 기본으로 빠져 있어요. 묶음 문제는 공통 지문이 자동으로 같이 들어가고, 마지막 장에 정답이 붙어요. 받은 워드 파일에서 자유롭게 고쳐서 인쇄하세요.</p>
     <div class="row" style="margin-top:10px"><label class="ws-item" style="cursor:pointer"><input type="checkbox" id="wsHae" checked> 맨 뒤에 해설 붙이기 (해석·어휘·해설)</label></div>
     <div class="row" style="margin-top:6px"><button class="btn primary" id="wsGo">워드로 만들기</button><span class="muted" id="wsCnt"></span></div>`;
-  const all={w:wrong,s:similar};
+  // 선택은 화면에 보이는(필터 통과한) 문항만 문제지에 들어감
   const picked=()=>[...document.querySelectorAll('[data-ws]:checked')].map(c=>all[c.dataset.ws[0]][+c.dataset.ws.slice(1)]);
   const cnt=()=>{ const l=picked(); const h=l.filter(x=>{ const Q=QCACHE[x.ex.id]; return Q&&Q.hq&&Q.hq[x.it.no]; }).length;
-    $('#wsCnt').textContent=`${l.length}문항 선택 · 해설 있는 문항 ${h}개`; };
-  document.querySelectorAll('[data-ws]').forEach(c=>c.onchange=cnt); cnt();
+    $('#wsCnt').textContent=`${l.length}문항 선택 · 해설 있는 문항 ${h}개`;
+    ['w','s'].forEach(pre=>{ const b=document.querySelector(`[data-wsall="${pre}"]`); if(!b) return; const cs=[...document.querySelectorAll(`[data-ws^="${pre}"]`)];
+      b.checked=cs.length>0&&cs.every(c=>c.checked); b.indeterminate=!b.checked&&cs.some(c=>c.checked); }); };
+  const renderLists=()=>{
+    const nw=wrong.filter(x=>visible('w',x)).length, ns=similar.filter(x=>visible('s',x)).length;
+    $('#wsHw').textContent=`틀렸던 문제 (${nw})`; $('#wsHs').textContent=`안 본 시험의 비슷한 문제 (${ns})`;
+    $('#wsListW').innerHTML=nw?allBox('w')+section(wrong,'w'):`<p class="muted">${wrong.length?'이 범위에 틀린 문제가 없어요.':'시험지 워드가 등록된 시험에서 틀린 문제가 없어요.'}</p>`;
+    $('#wsListS').innerHTML=ns?allBox('s')+section(similar,'s'):`<p class="muted">${similar.length?'선택한 학년·회차에 비슷한 문제가 없어요.':'같은 유형이 있는, 이 학생이 안 본 시험(워드 등록)이 없어요.'}</p>`;
+    document.querySelectorAll('[data-ws]').forEach(c=>c.onchange=()=>{ c.checked?sel.add(c.dataset.ws):sel.delete(c.dataset.ws); cnt(); });
+    document.querySelectorAll('[data-wsall]').forEach(b=>b.onchange=()=>{ document.querySelectorAll(`[data-ws^="${b.dataset.wsall}"]`).forEach(c=>{ c.checked=b.checked; b.checked?sel.add(c.dataset.ws):sel.delete(c.dataset.ws); }); cnt(); });
+    bindPrev(); cnt();
+  };
+  $('#wsRecent').onchange=e=>{ recentN=+e.target.value; renderLists(); };
+  document.querySelectorAll('[data-wsg]').forEach(c=>c.onchange=()=>{ c.checked?gradeSel.add(c.dataset.wsg):gradeSel.delete(c.dataset.wsg); renderLists(); });
   // 문제 제목 클릭 → 미리 보기 (틀린 문제는 학생이 고른 답 빨강, 정답 초록)
-  document.querySelectorAll('[data-prev]').forEach(el=>el.onclick=()=>{
+  function bindPrev(){ document.querySelectorAll('[data-prev]').forEach(el=>el.onclick=()=>{
     const id=el.dataset.prev, box=$('#pv-'+id), x=all[id[0]][+id.slice(1)];
     if(!box.hidden){ box.hidden=true; return; }
     if(!box.innerHTML){ const Q=QCACHE[x.ex.id]; box.innerHTML=Q?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,x.it.no),x.pick||0,+x.it.answer||0)}</div>`:'<span class="muted">문제를 불러오지 못했어요.</span>'; }
     box.hidden=false;
-  });
+  }); }
+  renderLists();
   $('#wsGo').onclick=async()=>{
     const list=picked(); if(!list.length) return alert('문제를 하나 이상 골라주세요.');
     $('#wsGo').disabled=true; $('#wsGo').textContent='만드는 중…';
