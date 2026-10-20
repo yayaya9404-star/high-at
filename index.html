@@ -64,6 +64,8 @@ tr.click{cursor:pointer} tr.click:hover td{background:#f8faff}
 .omr-cell.o{background:var(--ok-bg);border-color:var(--ok-line)}
 .omr-cell.x{background:var(--bad-bg);border-color:var(--bad-line)}
 .omr-cell.cur{outline:2px solid var(--main)}
+.omr-cell input{width:100%;border:0;background:transparent;text-align:center;font:inherit;font-size:18px;font-weight:700;padding:0 0 2px;color:var(--text);outline:none;caret-color:transparent}
+.omr-cell:focus-within{outline:2px solid var(--main)}
 .score-big{font-size:28px;font-weight:800}
 .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 16px;min-width:110px}
@@ -815,15 +817,15 @@ async function renderOmrTab(){
         <div><span class="cur-name">${esc(cur.student_name)}</span>
           <span class="muted"> ${curIdx+1}/${stuList.length}번째 · ${er?'입력됨 (다시 저장하면 수정)':'미입력'}</span></div>
         <button class="btn sm" id="omrSkip">건너뛰기 (결시)</button></div>`:''}
-      <label class="f" style="margin-top:12px">답안 (${ex.q_count}개 · 숫자 1~5, 무응답은 0) — Enter로 저장${manual?'':' 후 다음 학생'}
-        <input id="omrAns" class="omr-input" maxlength="${ex.q_count}" autocomplete="off" inputmode="numeric" value="${er?er.answers:''}"></label>
+      <div class="muted" style="margin-top:12px">답안 (${ex.q_count}칸 · 숫자 1~5, 무응답은 0) — 치면 다음 칸으로 넘어가요. 틀린 칸은 눌러서 고치고, Enter로 저장${manual?'':' 후 다음 학생'}</div>
+      <input type="hidden" id="omrAns" value="${er?esc(er.answers):''}">
       <div class="row" style="margin-top:10px;justify-content:space-between">
         <div><span class="score-big" id="omrScore">0</span><span class="muted"> 점 · <span id="omrCnt">0</span>/${ex.q_count} 입력</span></div>
         <div class="row">${manual&&er?'<span class="muted">수정 중: '+esc(er.student_name)+'</span>':''}
           ${manual?'<button class="btn" id="omrReset">비우기</button>':''}<button class="btn primary" id="omrSave">저장</button></div>
       </div>
       ${allDone?`<div class="done-box">${esc(cls)} ${stuList.length}명 입력을 모두 마쳤어요. 학생을 눌러 수정하거나 다른 반을 고르세요.</div>`:''}
-      <div class="omr-grid" id="omrGrid"></div>
+      <div class="omr-grid" id="omrGrid">${ex.items.map((it,i)=>`<div class="omr-cell" title="${esc(it.cat+' '+it.sub)}"><div class="n">${it.no}</div><input data-q="${i}" inputmode="numeric" autocomplete="off" aria-label="${it.no}번"></div>`).join('')}</div>
     </div>
     <div class="card">
       ${manual?`
@@ -848,15 +850,36 @@ async function renderOmrTab(){
   $('#omrBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); editingResp=null; omrCur=null; renderOmrTab(); };
   const cs=$('#omrClsSel'); if(cs) cs.onchange=e=>{ prefs.omrClass=e.target.value; savePrefs(); editingResp=null; omrCur=null; renderOmrTab(); };
   const ans=$('#omrAns');
+  const cells=[...document.querySelectorAll('#omrGrid input')];
+  // 칸 → 숨은 답안 문자열 (마지막 입력 칸까지, 중간 빈칸은 0=무응답)
   const update=()=>{
-    const v=ans.value.replace(/[^0-5]/g,''); if(v!==ans.value) ans.value=v;
-    const g=gradeAnswers(ex,v); $('#omrScore').textContent=g.score; $('#omrCnt').textContent=v.length;
-    $('#omrGrid').innerHTML=ex.items.map((it,i)=>{
-      const a=v[i]; const cls = a===undefined?'':(isOk(a,it)?'o':'x');
-      return `<div class="omr-cell ${cls} ${i===v.length?'cur':''}" title="${esc(it.cat+' '+it.sub)}"><div class="n">${it.no}</div><div class="a">${a===undefined?'':(a==='0'?'·':a)}</div></div>`;
-    }).join('');
+    let last=-1; cells.forEach((c,i)=>{ if(c.value) last=i; });
+    const v=cells.slice(0,last+1).map(c=>c.value||'0').join('');
+    ans.value=v; ans.dataset.gaps=cells.slice(0,last+1).map((c,i)=>c.value?'':i+1).filter(Boolean).join(',');
+    const g=gradeAnswers(ex,v); $('#omrScore').textContent=g.score; $('#omrCnt').textContent=cells.filter(c=>c.value).length;
+    cells.forEach((c,i)=>{ c.parentNode.classList.toggle('o',!!c.value&&isOk(c.value,ex.items[i])); c.parentNode.classList.toggle('x',!!c.value&&!isOk(c.value,ex.items[i])); });
   };
-  ans.oninput=update; update();
+  const go=i=>{ const c=cells[Math.max(0,Math.min(cells.length-1,i))]; c.focus(); c.select(); };
+  const init=(ans.value||'').replace(/[^0-5ox]/g,'');
+  cells.forEach((c,i)=>{ const ch=init[i]; c.value = ch===undefined?'':ch==='o'?'':ch==='x'?'':ch; });
+  cells.forEach((c,i)=>{
+    c.oninput=()=>{
+      const d=c.value.replace(/[^0-5]/g,'');
+      if(d.length<=1){ c.value=d; update(); if(d) go(i+1); return; }
+      [...d].forEach((ch,k)=>{ if(cells[i+k]) cells[i+k].value=ch; });   // 여러 개 붙여넣기 → 이어서 채움
+      update(); go(i+d.length);
+    };
+    c.onkeydown=e=>{
+      if(e.key==='Enter'){ e.preventDefault(); saveOmr(ex,onSaved); }
+      else if(e.key==='Backspace' && !c.value){ e.preventDefault(); if(i>0){ cells[i-1].value=''; update(); go(i-1); } }
+      else if(e.key==='ArrowLeft'){ e.preventDefault(); go(i-1); }
+      else if(e.key==='ArrowRight'){ e.preventDefault(); go(i+1); }
+      else if(/^[0-5]$/.test(e.key) && c.value){ e.preventDefault(); c.value=e.key; update(); go(i+1); }   // 채워진 칸은 덮어쓰기
+    };
+    c.onfocus=()=>c.select();
+  });
+  ans.focus=()=>{ const f=cells.findIndex(c=>!c.value); go(f<0?cells.length-1:f); };
+  update();
 
   // 명단 모드: 저장 후 같은 반에서 아직 입력하지 않은 다음 학생으로
   const nextStudent=(fromIdx, onlyUndone)=>{
@@ -873,7 +896,6 @@ async function renderOmrTab(){
     $('#omrClass').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#omrName').focus(); } };
     $('#omrReset').onclick=()=>{ editingResp=null; renderOmrTab(); };
   }
-  ans.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); saveOmr(ex,onSaved); } };
   $('#omrSave').onclick=()=>saveOmr(ex,onSaved);
   const sk=$('#omrSkip'); if(sk) sk.onclick=()=>{ const n=nextStudent(curIdx,false); omrCur=n?stuKey(n):omrCur; renderOmrTab(); };
 
@@ -892,7 +914,7 @@ async function renderOmrTab(){
     catch(err){ alert('삭제 실패: '+err.message); }
   });
   if(manual) (er? ans : $('#omrName')).focus();
-  else { ans.focus(); ans.setSelectionRange(ans.value.length, ans.value.length); }
+  else ans.focus();
 }
 
 let omrSaving=false;
@@ -902,6 +924,8 @@ async function saveOmr(ex, onSaved){
   const name=$('#omrName').value.trim(), cls=$('#omrClass').value.trim(), answers=$('#omrAns').value.replace(/[^0-5]/g,'');
   if(!name){ alert('이름을 입력하세요.'); $('#omrName').focus(); return; }
   if(!answers.length){ alert('답안을 입력하세요.'); return; }
+  const gaps=$('#omrAns').dataset.gaps||'';
+  if(gaps && !confirm(`${gaps}번 칸이 비어 있어요. 무응답(0)으로 저장할까요?`)) return;
   if(answers.length<ex.q_count && !confirm(`${answers.length}문항만 입력됐습니다. 나머지는 무응답으로 저장할까요?`)) return;
   const rs=await getResponses(ex.id);
   let id = editingResp ? editingResp.id : null;
