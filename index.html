@@ -105,7 +105,9 @@ table.adm td:first-child,table.adm th:first-child{text-align:left}
 .q-pick{background:var(--bad-bg);color:var(--bad);font-weight:700}
 .q-ans{background:var(--ok-bg);color:var(--ok);font-weight:700}
 .ws-grp{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-top:8px}
-.ws-item{display:flex;gap:6px;align-items:center;padding:3px 0;font-size:13px;cursor:pointer}
+.ws-item{display:flex;gap:6px;align-items:center;padding:3px 0;font-size:13px}
+.ws-prev{cursor:pointer;display:inline-flex;gap:6px;align-items:center} .ws-prev:hover b{color:var(--main);text-decoration:underline}
+.ws-pv{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:4px 0 8px 22px;background:#fcfcfd;max-height:420px;overflow:auto}
 .cat-bar.click{cursor:pointer} .cat-bar.click:hover{border-color:var(--main)}
 .hint{background:#f8fafc;border:1px dashed var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--sub);margin:10px 0}
 @media print{
@@ -1444,9 +1446,10 @@ function runsHtml(p){
 function chunkHtml(Q, idx, pick, ans){
   const mark=html=>{ const s=html.replace(/<[^>]+>/g,'').trim(); const k='①②③④⑤'.indexOf(s[0])+1;
     return k&&k===pick&&k!==ans?`<span class="q-pick">${html}</span>`:k&&k===ans?`<span class="q-ans">${html}</span>`:html; };
+  const markLines=h=>h.split('<br>').map(mark).join('<br>');   // 한 문단 안에 줄바꿈으로 보기가 여러 개인 경우
   return idx.map(i=>{ const e=Q.els[i];
-    if(e.localName==='p'){ const h=runsHtml(e); return h?`<p>${mark(h)}</p>`:''; }
-    if(e.localName==='tbl') return `<table class="q-tbl">${wEls(e,'tr').map(tr=>`<tr>${[...tr.children].filter(c=>c.localName==='tc').map(tc=>`<td>${wEls(tc,'p').map(p=>mark(runsHtml(p))).join('<br>')}</td>`).join('')}</tr>`).join('')}</table>`;
+    if(e.localName==='p'){ const h=runsHtml(e); return h?`<p>${markLines(h)}</p>`:''; }
+    if(e.localName==='tbl') return `<table class="q-tbl">${wEls(e,'tr').map(tr=>`<tr>${[...tr.children].filter(c=>c.localName==='tc').map(tc=>`<td>${wEls(tc,'p').map(p=>markLines(runsHtml(p))).join('<br>')}</td>`).join('')}</tr>`).join('')}</table>`;
     return '';
   }).join('');
 }
@@ -1480,7 +1483,7 @@ async function openWorksheet(name, code, rows){
     const Q=await getQbank(o.ex.id);
     o.ex.items.forEach((it,i)=>{ if(isOk(o.r.answers[i],it)) return;
       const k=(it.cat||'미지정')+'|'+(it.sub||''); weakSubs[k]=(weakSubs[k]||0)+1;
-      if(Q&&Q.q[it.no]) wrong.push({ex:o.ex,it,key:k}); });
+      if(Q&&Q.q[it.no]) wrong.push({ex:o.ex,it,key:k,pick:+o.r.answers[i]||0}); });
   }
   // 2) 이 학생이 안 본 시험에서 같은 세부 유형
   const taken=new Set(rows.map(o=>o.ex.id)), similar=[];
@@ -1491,7 +1494,7 @@ async function openWorksheet(name, code, rows){
   }
   const keyOrder=Object.keys(weakSubs).sort((a,b)=>weakSubs[b]-weakSubs[a]);
   const listen=k=>k.startsWith('듣기|');
-  const row=(x,j,pre,checked)=>`<label class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${checked?'checked':''}> ${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번</span></label>`;
+  const row=(x,j,pre,checked)=>`<div class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${checked?'checked':''}> <span class="ws-prev" data-prev="${pre}${j}" title="눌러서 문제 미리 보기">${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번 ▾</span></span></div><div class="ws-pv" id="pv-${pre}${j}" hidden></div>`;
   const section=(list,pre,defChecked)=>keyOrder.filter(k=>list.some(x=>x.key===k)).map(k=>`<div class="ws-grp"><div class="muted" style="font-weight:700">${esc(k.replace('|',' · '))} <span>(누적 오답 ${weakSubs[k]})</span></div>${list.map((x,j)=>x.key===k?row(x,j,pre,defChecked&&!listen(k)):'').join('')}</div>`).join('');
   $('#wsBody').innerHTML=`
     <label class="f" style="margin:10px 0">문제지 제목<input id="wsTitle" value="${esc(name)} 모의고사 대비 오답 문제지"></label>
@@ -1505,6 +1508,13 @@ async function openWorksheet(name, code, rows){
   const picked=()=>[...document.querySelectorAll('[data-ws]:checked')].map(c=>all[c.dataset.ws[0]][+c.dataset.ws.slice(1)]);
   const cnt=()=>$('#wsCnt').textContent=`${picked().length}문항 선택`;
   document.querySelectorAll('[data-ws]').forEach(c=>c.onchange=cnt); cnt();
+  // 문제 제목 클릭 → 미리 보기 (틀린 문제는 학생이 고른 답 빨강, 정답 초록)
+  document.querySelectorAll('[data-prev]').forEach(el=>el.onclick=()=>{
+    const id=el.dataset.prev, box=$('#pv-'+id), x=all[id[0]][+id.slice(1)];
+    if(!box.hidden){ box.hidden=true; return; }
+    if(!box.innerHTML){ const Q=QCACHE[x.ex.id]; box.innerHTML=Q?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,x.it.no),x.pick||0,+x.it.answer||0)}</div>`:'<span class="muted">문제를 불러오지 못했어요.</span>'; }
+    box.hidden=false;
+  });
   $('#wsGo').onclick=async()=>{
     const list=picked(); if(!list.length) return alert('문제를 하나 이상 골라주세요.');
     $('#wsGo').disabled=true; $('#wsGo').textContent='만드는 중…';
@@ -1524,6 +1534,13 @@ async function buildWorksheet(title, list){
   const doc=new DOMParser().parseFromString(await zip.file('word/document.xml').async('string'),'application/xml');
   const rels=new DOMParser().parseFromString(await zip.file('word/_rels/document.xml.rels').async('string'),'application/xml');
   const body=wEls(doc,'body')[0]; const sect=[...body.children].find(e=>e.localName==='sectPr');
+  if(sect){   // 문제지는 항상 2단 (원본 마지막 구역이 해설용 3단일 수 있음)
+    wEls(sect,'cols').forEach(c=>c.parentNode.removeChild(c));
+    ['headerReference','footerReference','titlePg'].forEach(n=>wEls(sect,n).forEach(c=>c.parentNode.removeChild(c)));   // 원본 머리말(예: "정답 및 해설") 제거
+    const cols=doc.createElementNS(W_NS,'w:cols'); cols.setAttributeNS(W_NS,'w:num','2'); cols.setAttributeNS(W_NS,'w:sep','1'); cols.setAttributeNS(W_NS,'w:space','420');
+    const after=['pgSz','pgMar','paperSrc','pgBorders','lnNumType','pgNumType'].map(n=>wEls(sect,n)[0]).filter(Boolean).pop();
+    after ? sect.insertBefore(cols, after.nextSibling) : sect.insertBefore(cols, sect.firstChild);
+  }
   [...body.children].forEach(e=>{ if(e!==sect) body.removeChild(e); });
   const put=node=>body.insertBefore(node,sect||null);
   const para=(text,{bold=false,size=0,pageBreak=false}={})=>{
