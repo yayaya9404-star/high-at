@@ -713,14 +713,14 @@ async function readSheet(file){
     wb=XLSX.read(text.replace(/^﻿/,''),{type:'string'});
   } else wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
   const aoa=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false});
-  let hi=aoa.findIndex(r=>r.some(c=>/이름|성명/.test(String(c)))); if(hi<0) hi=0;
+  let hi=aoa.findIndex(r=>r.some(c=>/이름|성명|학생명/.test(String(c)))); if(hi<0) hi=0;
   const header=(aoa[hi]||[]).map(c=>String(c).trim());
   const rows=aoa.slice(hi+1).filter(r=>r.some(c=>String(c).trim()!==''));
   const find=re=>header.findIndex(h=>re.test(h));
   const g1=find(/응시|시험/);
   const code=find(/회원\s*코드|회원\s*번호|코드|code|^id$/i);
   const no=header.findIndex((h,i)=>i!==code && /번호|연락처|전화|휴대/.test(h));
-  return {header, rows, map:{code, name:find(/이름|성명/), cls:find(/반|클래스|class/i), no, grade:g1>=0?g1:find(/학년|레벨/), branch:find(/분원|지점|캠퍼스/), teacher:find(/담임|선생|강사|teacher/i)}};
+  return {header, rows, map:{code, name:find(/이름|성명|학생명/), cls:find(/반|클래스|class/i), no, grade:g1>=0?g1:find(/학년|레벨/), branch:find(/분원|지점|캠퍼스/), teacher:find(/담임|딤임|담당|선생|강사|teacher/i)}};
 }
 function draftRows(d){
   const cell=(r,i)=>i>=0?String(r[i]??'').trim():'';
@@ -780,10 +780,19 @@ async function renderRosterTab(){
       if($('#tbRound').value==='*' && !confirm('전체 회차에 이 명단의 담임을 덮어씁니다. 특정 회차만 바꾸려면 먼저 회차를 고르세요. 계속할까요?')) return;
       const d=await readSheet(f); if(d.map.teacher<0) throw new Error('담임 열을 찾지 못했어요.');
       const old=draftRows(d); const rs=await tbTargets(), changed=[];
-      rs.forEach(r=>{ const m=old.find(s=>r.member_code&&s.member_code===r.member_code) || old.find(s=>s.student_name===r.student_name&&(!s.class_name||s.class_name===r.class_name));
-        if(m&&m.teacher&&m.teacher!==r.teacher){ r.teacher=m.teacher; changed.push(r); } });
+      // 반은 괄호까지 그대로 비교 ("MA1(1-3개월)"과 "MA1(4-6개월)"은 다른 반). 반이 다르면 이름이 명단에 한 명뿐일 때만 연결
+      rs.forEach(r=>{ const same=old.filter(s=>s.student_name===r.student_name);
+        let m=old.find(s=>r.member_code&&s.member_code===r.member_code) || same.find(s=>s.class_name===r.class_name) || (same.length===1?same[0]:null);
+        // 동명이인이 같은 반·같은 담임이면 담임·반만 채우고 회원코드는 비워 둠 (누가 누군지 구분 불가)
+        if(!m && same.length>1 && same.every(s=>s.teacher===same[0].teacher && s.class_name===same[0].class_name)) m={...same[0], member_code:''};
+        if(!m) return; let ch=false;
+        // 본사 리포트로 들어온 과정명만 있는 반("MA1")은 그 시기 명단의 정확한 반("MA1(1-3개월)")으로
+        if(m.class_name && r.class_name!==m.class_name && (!r.class_name || m.class_name.startsWith(r.class_name+'('))){ r.class_name=m.class_name; ch=true; }
+        if(m.teacher&&m.teacher!==r.teacher){ r.teacher=m.teacher; ch=true; }
+        if(!r.member_code&&m.member_code){ r.member_code=m.member_code; ch=true; }   // 회원코드 없이 들어간 답안은 코드도 연결
+        if(ch) changed.push(r); });
       if(!changed.length) return alert('바뀔 답안이 없어요.');
-      if(!confirm(`${changed.length}건의 담임을 이 명단 기준으로 바꿀까요?`)) return;
+      if(!confirm(`${changed.length}건의 담임을 이 명단 기준으로 바꿀까요?\n(회원코드가 비어 있거나 반이 과정명만 있는 답안은 회원코드·반도 채워요)`)) return;
       await tbApply(changed,'담임 변경');
     }catch(err){ alert(err.message); }
     e.target.value='';
