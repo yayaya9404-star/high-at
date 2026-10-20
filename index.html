@@ -804,52 +804,9 @@ async function renderRosterTab(){
       </tbody></table>`:'<p class="muted">아직 명단이 없습니다.</p>'}
     </div>
   </div>
-  <div class="card" style="margin-top:16px">
-    <h2>회차별 담임 기록 · ${esc(br)}</h2>
-    <p class="muted">답안에는 입력할 때의 담임과 반이 저장돼요. 이미 입력된 회차의 담임·반을 채우거나 바로잡을 때 쓰세요. "그 시기 명단으로 덮어쓰기"는 담임과 반을 모두 그 명단 기준으로 바꿔요.</p>
-    <div class="row">
-      <label class="f">회차<select id="tbRound"><option value="*">전체 회차</option>${allRounds().map(k=>`<option value="${k}">${roundLabel(k)}</option>`).join('')}</select></label>
-      <button class="btn" id="tbFill" style="align-self:flex-end">빈 담임을 그 회차 명단으로 채우기</button>
-      <label class="f">그 시기 명단(회원코드·담임)으로 덮어쓰기<input type="file" id="tbFile" accept=".xlsx,.xls,.csv"></label>
-    </div>
-    <p class="muted" id="tbMsg"></p>
-  </div>`;
+`;
   $('#rBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderRosterTab(); };
   $('#rRound').onchange=e=>{ rosterRk=e.target.value; renderRosterTab(); };
-  // 회차별 담임 기록 채우기
-  const tbTargets=async()=>{ const rk=$('#tbRound').value, out=[];
-    for(const ex of EXAMS){ if(rk!=='*' && roundKey(ex)!==rk) continue; (await getResponses(ex.id,true)).filter(r=>r.branch===br).forEach(r=>{ r._rk=roundKey(ex); out.push(r); }); } return out; };
-  const tbApply=async(list,label)=>{ for(const r of list){ delete r._rk; await DB.saveResponse(r); } Object.keys(resCache).forEach(k=>delete resCache[k]); $('#tbMsg').textContent=`${label} ${list.length}건 저장했어요.`; };
-  $('#tbFill').onclick=async()=>{
-    const rs=(await tbTargets()).filter(r=>!r.teacher), changed=[];
-    rs.forEach(r=>{ const t=(rosterOf(r,rosterSync(br,r._rk))||{}).teacher; if(t){ r.teacher=t; changed.push(r); } });
-    if(!changed.length) return alert('채울 답안이 없어요. (이미 담임이 있거나, 명단에서 담임을 찾지 못함)');
-    if(!confirm(`담임이 비어 있는 답안 ${changed.length}건을 지금 명단의 담임으로 채울까요?`)) return;
-    try{ await tbApply(changed,'담임 채움'); }catch(err){ alert('저장 실패: '+err.message); }
-  };
-  $('#tbFile').onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    try{
-      if($('#tbRound').value==='*' && !confirm('전체 회차에 이 명단의 담임을 덮어씁니다. 특정 회차만 바꾸려면 먼저 회차를 고르세요. 계속할까요?')) return;
-      const d=await readSheet(f); if(d.map.teacher<0) throw new Error('담임 열을 찾지 못했어요.');
-      const old=draftRows(d); const rs=await tbTargets(), changed=[];
-      // 반은 괄호까지 그대로 비교 ("MA1(1-3개월)"과 "MA1(4-6개월)"은 다른 반). 반이 다르면 이름이 명단에 한 명뿐일 때만 연결
-      rs.forEach(r=>{ const same=old.filter(s=>s.student_name===r.student_name);
-        let m=old.find(s=>r.member_code&&s.member_code===r.member_code) || same.find(s=>s.class_name===r.class_name) || (same.length===1?same[0]:null);
-        // 동명이인이 같은 반·같은 담임이면 담임·반만 채우고 회원코드는 비워 둠 (누가 누군지 구분 불가)
-        if(!m && same.length>1 && same.every(s=>s.teacher===same[0].teacher && s.class_name===same[0].class_name)) m={...same[0], member_code:''};
-        if(!m) return; let ch=false;
-        // 반도 그 시기 명단의 실제 반(예: "MA1(1-3개월)")으로 맞춤 — 시험 볼 때의 OMR 반("고1 01반") 대신
-        if(m.class_name && r.class_name!==m.class_name){ r.class_name=m.class_name; ch=true; }
-        if(m.teacher&&m.teacher!==r.teacher){ r.teacher=m.teacher; ch=true; }
-        if(!r.member_code&&m.member_code){ r.member_code=m.member_code; ch=true; }   // 회원코드 없이 들어간 답안은 코드도 연결
-        if(ch) changed.push(r); });
-      if(!changed.length) return alert('바뀔 답안이 없어요.');
-      if(!confirm(`${changed.length}건의 담임을 이 명단 기준으로 바꿀까요?\n(반도 이 명단의 반으로 바꾸고, 비어 있는 회원코드도 채워요)`)) return;
-      await tbApply(changed,'담임 변경');
-    }catch(err){ alert(err.message); }
-    e.target.value='';
-  };
   $('#rFile').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
     if(!window.XLSX) return alert('엑셀 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
@@ -1083,6 +1040,22 @@ const examDateKey = e => (e.exam_date||String(e.created_at||'').slice(0,10)||'')
 function cmpCandidates(ex){ const g=normGrade(ex.grade); return EXAMS.filter(e=>e.id!==ex.id && (!g || normGrade(e.grade)===g)).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
 function defaultCmp(ex){ const k=examDateKey(ex); const c=cmpCandidates(ex).find(e=>examDateKey(e)<k); return c?c.id:''; }
 const sameResp = (a,b) => (a.member_code && b.member_code) ? a.member_code===b.member_code : (a.branch===b.branch && a.student_name===b.student_name);
+// 문항 클릭 → 시험지 문제 + 오답률·선지별 선택 비율
+async function openQuestionView(ex, no, rs, label){
+  const i=ex.items.findIndex(it=>it.no===no), it=ex.items[i]; if(!it) return;
+  const wr=rs.length?Math.round(rs.filter(r=>!isOk(r.answers[i],it)).length/rs.length*100):null;
+  const cnt=[0,0,0,0,0,0]; rs.forEach(r=>cnt[+r.answers[i]||0]++);
+  const noDist=oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers));
+  $('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(ex.name)} · ${no}번</h2><button class="btn" id="closeM">닫기</button></div>
+    <p style="margin:8px 0">${pill(it.cat)} <b>${esc(it.sub||'')}</b> · 정답 ${circled(+it.answer)} · ${it.points}점 · ${esc(label||'')} 응시 ${rs.length}명 · 오답률 <b class="mark-x">${wr==null?'-':wr+'%'}</b></p>
+    ${noDist||!rs.length?'':`<div class="row" style="gap:6px;margin-bottom:8px">${[1,2,3,4,5].map(n=>`<span class="pill" style="${n===+it.answer?'background:#dcfce7;color:#166534':'background:#f1f5f9;color:#334155'}">${'①②③④⑤'[n-1]} ${pct(cnt[n],rs.length)}% (${cnt[n]}명)</span>`).join('')}<span class="pill" style="background:#f1f5f9;color:#334155">무응답 ${pct(cnt[0],rs.length)}%</span></div>`}
+    <div id="qvBody"><p class="muted">시험지 불러오는 중…</p></div>`;
+  $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
+  $('#modalBg').classList.add('show');
+  try{ const Q=await getQbank(ex.id);
+    $('#qvBody').innerHTML=Q&&Q.q[no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,no),0,+it.answer||0)}</div>`:'<p class="muted">이 시험은 시험지 워드가 등록되지 않아 문제를 보여줄 수 없어요. (시험 관리에서 워드를 올리면 보여요)</p>';
+  }catch(err){ $('#qvBody').innerHTML=`<p class="muted">문제를 불러오지 못했어요: ${esc(err.message)}</p>`; }
+}
 function wrongRates(ex, rs){
   return ex.items.map((it,i)=>{
     const n=rs.length; if(!n) return null;
@@ -1155,7 +1128,7 @@ async function renderResultTab(){
       <table><thead><tr><th>번호</th><th>유형</th><th>세부</th><th>정답</th><th>배점</th><th>오답률</th><th>선지별 선택 비율 (①~⑤ / 무응답)</th></tr></thead><tbody>
       ${ex.items.map((it,i)=>{
         const cnt=[0,0,0,0,0,0]; rs.forEach(r=>{ const a=+r.answers[i]||0; cnt[a]++; });
-        return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
+        return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}" data-resq="${it.no}" style="cursor:pointer" title="눌러서 문제 보기">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
           <td><b>${wr[i]==null?'-':wr[i]+'%'}</b></td>
           <td>${oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers))?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr>`;
       }).join('')}
@@ -1169,6 +1142,7 @@ async function renderResultTab(){
   document.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{ resSub=b.dataset.sub; renderResultTab(); });
   document.querySelectorAll('[data-rep]').forEach(tr=>tr.onclick=()=>openReport(ex, all.find(r=>r.id===tr.dataset.rep), all));
   $('#csvBtn').onclick=()=>exportCsv(ex, sorted, cats);
+  document.querySelectorAll('[data-resq]').forEach(el=>el.onclick=()=>openQuestionView(ex,+el.dataset.resq,rs,resBranch));
 }
 
 function openReport(ex, r, all){
@@ -1385,7 +1359,7 @@ async function renderAdminTab(){
 
   // ③ 오답률 TOP5 (선택 학년, 분원별 + 전체)
   const top3=list=>{ if(!G.ex||!list.length) return []; const wr=wrongRates(G.ex,list); return G.ex.items.map((it,i)=>({it,w:wr[i]})).sort((a,b)=>b.w-a.w||a.it.no-b.it.no).slice(0,5); };
-  const topCell=t=>t?`<b>${t.it.no}번</b> ${pill(t.it.cat)} <span class="muted">${esc(t.it.sub||'')}</span> <b class="mark-x">${t.w}%</b>`:'<span class="muted">-</span>';
+  const topCell=(t,ri)=>t?`<span class="ws-prev" data-topq="${ri}|${t.it.no}" title="눌러서 문제 보기"><b>${t.it.no}번</b> ${pill(t.it.cat)} <span class="muted">${esc(t.it.sub||'')}</span> <b class="mark-x">${t.w}%</b></span>`:'<span class="muted">-</span>';
   const topRows=[...BRANCHES.map(b=>({label:b,l:G.all.filter(r=>r.branch===b)})),{label:'전체',l:G.all,strong:true}].filter(x=>x.l.length||x.strong);
 
   // ④ 반별 성적 (선택 분원·학년) — 반 최고점 파랑, 최저점 빨강
@@ -1453,7 +1427,7 @@ async function renderAdminTab(){
 
     <h3 style="margin-top:22px">오답률 TOP 5 · ${admGrade}</h3>
     <div style="overflow:auto"><table><thead><tr><th>분원</th><th>응시</th><th>1위</th><th>2위</th><th>3위</th><th>4위</th><th>5위</th></tr></thead><tbody>
-      ${topRows.map(x=>{ const t=top3(x.l); return `<tr${x.strong?' style="font-weight:700;background:#fafbfc"':''}><td>${esc(x.label)}</td><td>${x.l.length}</td>${[0,1,2,3,4].map(i=>`<td>${topCell(t[i])}</td>`).join('')}</tr>`; }).join('')}
+      ${topRows.map((x,ri)=>{ const t=top3(x.l); return `<tr${x.strong?' style="font-weight:700;background:#fafbfc"':''}><td>${esc(x.label)}</td><td>${x.l.length}</td>${[0,1,2,3,4].map(i=>`<td>${topCell(t[i],ri)}</td>`).join('')}</tr>`; }).join('')}
     </tbody></table></div>
   </div>
 
@@ -1495,6 +1469,7 @@ async function renderAdminTab(){
   $('#admBranch').onchange=e=>{ admBranch=e.target.value; renderAdminTab(); };
   document.querySelectorAll('[data-admpick]').forEach(s=>s.onchange=()=>{ admPick[admRound+'|'+s.dataset.admpick]=s.value; renderAdminTab(); });
   document.querySelectorAll('[data-admg]').forEach(b=>b.onclick=()=>{ admGrade=b.dataset.admg; renderAdminTab(); });
+  document.querySelectorAll('[data-topq]').forEach(el=>el.onclick=()=>{ const [ri,no]=el.dataset.topq.split('|').map(Number); const x=topRows[ri]; openQuestionView(G.ex,no,x.l,x.label); });
 }
 
 /* ===================== 6. 문항 은행 (시험지 워드) · 오답 보기 · 문제지 만들기 ===================== */
