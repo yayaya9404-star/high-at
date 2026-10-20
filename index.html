@@ -1242,9 +1242,7 @@ function exportCsv(ex, rows, cats){
 /* ===================== 4. 학생 기록 (회원코드 기준 누적) ===================== */
 let histCode=null, histQ='';
 async function renderHistTab(){
-  const br=prefs.branch; await loadStudents(br);
-  const list=[], seenStu=new Set();   // 모든 회차 명단을 합침 (최신 회차 정보 우선)
-  rosterRounds(br).forEach(k=>(STU[br]||[]).filter(s=>(s.exam_round||'')===k).forEach(s=>{ const id=s.member_code||('n:'+s.student_name+'|'+s.class_name); if(!seenStu.has(id)){ seenStu.add(id); list.push(s); } }));
+  const br=prefs.branch, list=await getStudents(br);   // 가장 최신 회차 명단의 학생만 (퇴원생 제외)
   const q=histQ.trim();
   const found=list.filter(s=>s.member_code && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q)));
   const noCode=list.length && !list.some(s=>s.member_code);
