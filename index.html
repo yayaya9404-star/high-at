@@ -1035,7 +1035,7 @@ async function saveOmr(ex, onSaved){
 }
 
 /* ===================== 3. 결과·분석 ===================== */
-let resSub='students', resBranch='전체', resCmp={};   // resCmp[시험id] = 비교할 시험 id ('' = 비교 안 함)
+let resSub='students', resBranch='전체', resCmp={}, resCls='', resClsTh=40;   // resCmp[시험id] = 비교할 시험 id ('' = 비교 안 함)
 const examDateKey = e => (e.exam_date||String(e.created_at||'').slice(0,10)||'');
 function cmpCandidates(ex){ const g=normGrade(ex.grade); return EXAMS.filter(e=>e.id!==ex.id && (!g || normGrade(e.grade)===g)).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
 function defaultCmp(ex){ const k=examDateKey(ex); const c=cmpCandidates(ex).find(e=>examDateKey(e)<k); return c?c.id:''; }
@@ -1094,6 +1094,36 @@ async function renderResultTab(){
   const catRate=(e,list)=>{ const m={}; list.forEach(r=>{ const cs=catScores(e,r.answers); Object.entries(cs).forEach(([c,v])=>{ m[c]=m[c]||{ok:0,n:0}; m[c].ok+=v.ok; m[c].n+=v.n; }); }); return m; };
   const curCat=catRate(ex,rs), prevCat=cmpEx?catRate(cmpEx,cmpRs):{};
 
+  // 반별 분석: 반을 고르면 그 반 오답률 높은 순 (해설할 문항 고르기용)
+  const clsKey=r=>(resBranch==='전체'?r.branch+' · ':'')+(r.class_name||'(반 없음)');
+  const clsList=[...new Set(rs.map(clsKey))].sort(koCmp);
+  if(!clsList.includes(resCls)) resCls=clsList[0]||'';
+  const hideL=LS.get('mx_hideListen',false);
+  const cRs=rs.filter(r=>clsKey(r)===resCls);
+  const cWr=wrongRates(ex,cRs);
+  const noDist=oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers));
+  const cItems=ex.items.map((it,i)=>({it,i,w:cWr[i]})).filter(o=>o.w!=null && o.w>=resClsTh && !(hideL&&o.it.cat==='듣기')).sort((a,b)=>b.w-a.w||a.it.no-b.it.no);
+  const cAvg=cRs.length?(cRs.reduce((a,r)=>a+r.score,0)/cRs.length).toFixed(1):'-';
+  const clsHtml=`
+    <div class="row" style="gap:14px;align-items:flex-end;margin:6px 0 10px">
+      <label class="f">반<select id="clsSel">${clsList.map(c=>`<option ${c===resCls?'selected':''}>${esc(c)}</option>`).join('')||'<option>응답 없음</option>'}</select></label>
+      <label class="f">오답률 기준<select id="clsTh">${[20,30,40,50,60,70].map(n=>`<option value="${n}" ${n===resClsTh?'selected':''}>${n}% 이상</option>`).join('')}</select></label>
+      <label class="ws-item" style="cursor:pointer"><input type="checkbox" id="clsHideL" ${hideL?'checked':''}> 듣기 빼기</label>
+      <span class="muted">${cRs.length}명 · 반 평균 ${cAvg}점 · 해설할 문항 <b>${cItems.length}</b>개</span>
+    </div>
+    ${cItems.length?`<table><thead><tr><th>번호</th><th>유형</th><th>반 오답률</th><th>${resBranch==='전체'?'전체':esc(resBranch)} 오답률</th><th>많이 고른 오답</th><th>틀린 학생</th></tr></thead><tbody>
+      ${cItems.map(({it,i,w})=>{ const wrongRs=cRs.filter(r=>!isOk(r.answers[i],it)); const cnt=[0,0,0,0,0,0]; wrongRs.forEach(r=>cnt[+r.answers[i]||0]++);
+        const top=[1,2,3,4,5].filter(n=>n!==+it.answer&&cnt[n]).sort((a,b)=>cnt[b]-cnt[a])[0];
+        return `<tr class="click" data-resq="${it.no}" title="눌러서 문제 보기"><td><span class="qno x">${it.no}</span> <span class="muted">▾</span></td><td>${pill(it.cat)} <span class="muted">${esc(it.sub||'')}</span></td>
+          <td><b class="mark-x">${w}%</b> <span class="muted">(${wrongRs.length}/${cRs.length})</span></td><td>${wr[i]==null?'-':wr[i]+'%'}</td>
+          <td>${noDist?'<span class="muted">-</span>':top?`${circled(top)} <span class="muted">${cnt[top]}명</span> · 정답 ${circled(+it.answer)}`:`<span class="muted">무응답</span>`}</td>
+          <td class="muted">${wrongRs.map(r=>esc(r.student_name)+(noDist?'':`(${(+r.answers[i])?circled(+r.answers[i]):'-'})`)).join(', ')}</td></tr>
+          <tr class="qpv-row" data-pvfor="${it.no}" hidden><td colspan="6"></td></tr>`; }).join('')}
+      </tbody></table>
+      <p class="muted">문항을 누르면 아래에 시험지 문제가 펼쳐져요. 틀린 학생 옆 괄호는 그 학생이 고른 답이에요.</p>
+      <div class="row" style="margin-top:8px;gap:10px"><button class="btn primary" id="clsWs">이 문항들로 해설용 문제지 만들기 (워드)</button><label class="ws-item" style="cursor:pointer"><input type="checkbox" id="clsHae" checked> 맨 뒤에 해설 붙이기</label></div>`
+    : `<p class="muted">${cRs.length?`오답률 ${resClsTh}% 이상인 문항이 없어요. 기준을 낮춰 보세요.`:'이 반 응답이 없어요.'}</p>`}`;
+
   $('#tab-result').innerHTML=`
   <div class="card">
     <div class="row" style="margin-bottom:14px">
@@ -1116,9 +1146,9 @@ async function renderResultTab(){
         <div class="bar"><i style="width:${cur}%;background:${CAT_COLORS[c]||'#94a3b8'}"></i></div>
         ${prev==null?'':`<div class="bar" style="margin-top:3px;height:5px"><i style="width:${prev}%;background:#cbd5e1"></i></div>`}</div>`; }).join('')}</div>
       <p class="muted" style="margin:-8px 0 12px">유형별 정답률: 진한 막대 = 이번 시험, 회색 막대 = ${esc(cmpEx.name)}</p>`:''}
-    <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button></div>
+    <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button><button data-sub="cls" class="${resSub==='cls'?'active':''}">반별 분석</button></div>
     <div style="overflow:auto">
-    ${resSub==='students' ? `
+    ${resSub==='cls' ? clsHtml : resSub==='students' ? `
       <table><thead><tr><th>순위</th><th>분원</th><th>반</th><th>이름</th><th>총점</th>${cmpEx?'<th>지난 시험</th><th>변화</th>':''}${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
       ${sorted.map(r=>{ const cs=catScores(ex,r.answers); return `<tr class="click" data-rep="${r.id}"><td>${rankOf(r.score)}</td><td>${esc(r.branch)}</td><td>${esc(r.class_name)}</td><td><b>${esc(r.student_name)}</b></td><td><b>${r.score}</b></td>
         ${cmpEx?(()=>{ const pv=prevOf(r); return pv?`<td>${pv.score}</td><td>${diffTag(to100(r.score,ex)-to100(pv.score,cmpEx))}</td>`:'<td class="muted">-</td><td class="muted">-</td>'; })():''}
@@ -1128,11 +1158,11 @@ async function renderResultTab(){
       <table><thead><tr><th>번호</th><th>유형</th><th>세부</th><th>정답</th><th>배점</th><th>오답률</th><th>선지별 선택 비율 (①~⑤ / 무응답)</th></tr></thead><tbody>
       ${ex.items.map((it,i)=>{
         const cnt=[0,0,0,0,0,0]; rs.forEach(r=>{ const a=+r.answers[i]||0; cnt[a]++; });
-        return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}" data-resq="${it.no}" style="cursor:pointer" title="눌러서 문제 보기">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
+        return `<tr class="click" data-resq="${it.no}" title="눌러서 문제 보기"><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}">${it.no}</span> <span class="muted">▾</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
           <td><b>${wr[i]==null?'-':wr[i]+'%'}</b></td>
-          <td>${oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers))?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr>`;
+          <td>${oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers))?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr><tr class="qpv-row" data-pvfor="${it.no}" hidden><td colspan="7"></td></tr>`;
       }).join('')}
-      </tbody></table>`}
+      </tbody></table><p class="muted">문항을 누르면 바로 아래에 시험지 문제가 펼쳐져요 (정답 초록색). 시험지 워드를 올린 시험만 보여요.</p>`}
     </div>
   </div>`;
   bindExamPicker('resP', ex.id, id=>{ resExamId=id; renderResultTab(); });
@@ -1142,7 +1172,28 @@ async function renderResultTab(){
   document.querySelectorAll('.subtabs button').forEach(b=>b.onclick=()=>{ resSub=b.dataset.sub; renderResultTab(); });
   document.querySelectorAll('[data-rep]').forEach(tr=>tr.onclick=()=>openReport(ex, all.find(r=>r.id===tr.dataset.rep), all));
   $('#csvBtn').onclick=()=>exportCsv(ex, sorted, cats);
-  document.querySelectorAll('[data-resq]').forEach(el=>el.onclick=()=>openQuestionView(ex,+el.dataset.resq,rs,resBranch));
+  // 문항 줄 클릭 → 바로 아래에 시험지 문제 펼치기
+  document.querySelectorAll('[data-resq]').forEach(el=>el.onclick=async()=>{
+    const no=+el.dataset.resq, row=document.querySelector(`[data-pvfor="${no}"]`); if(!row) return;
+    if(!row.hidden){ row.hidden=true; return; }
+    const td=row.firstElementChild; row.hidden=false;
+    if(!td.innerHTML){ td.innerHTML='<span class="muted">시험지 불러오는 중…</span>';
+      try{ const Q=await getQbank(ex.id); const it=ex.items.find(x=>x.no===no);
+        td.innerHTML=Q&&Q.q[no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,no),0,+it.answer||0)}</div>`:'<span class="muted">이 시험은 시험지 워드가 등록되지 않았어요. 시험 관리에서 워드를 올리면 문제가 보여요.</span>';
+      }catch(err){ td.innerHTML=`<span class="muted">문제를 불러오지 못했어요: ${esc(err.message)}</span>`; } }
+  });
+  const cs=$('#clsSel'); if(cs) cs.onchange=e=>{ resCls=e.target.value; renderResultTab(); };
+  const ct=$('#clsTh'); if(ct) ct.onchange=e=>{ resClsTh=+e.target.value; renderResultTab(); };
+  const ch=$('#clsHideL'); if(ch) ch.onchange=e=>{ LS.set('mx_hideListen',e.target.checked); renderResultTab(); };
+  const cw=$('#clsWs'); if(cw) cw.onclick=async()=>{
+    const Q=await getQbank(ex.id).catch(()=>null);
+    if(!Q) return alert('이 시험은 시험지 워드가 등록되지 않아 문제지를 만들 수 없어요. 시험 관리에서 워드를 먼저 올려주세요.');
+    const list=cItems.filter(o=>Q.q[o.it.no]).map(o=>({ex,it:o.it})); if(!list.length) return alert('시험지에서 찾은 문항이 없어요.');
+    cw.disabled=true; cw.textContent='만드는 중…';
+    try{ await buildWorksheet(`${resCls} · ${ex.name} 해설 문항`, list, $('#clsHae').checked); }
+    catch(err){ alert('문제지를 만들지 못했어요: '+err.message); }
+    cw.disabled=false; cw.textContent='이 문항들로 해설용 문제지 만들기 (워드)';
+  };
 }
 
 function openReport(ex, r, all){
