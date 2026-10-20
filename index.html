@@ -1047,7 +1047,7 @@ async function renderResultTab(){
         const cnt=[0,0,0,0,0,0]; rs.forEach(r=>{ const a=+r.answers[i]||0; cnt[a]++; });
         return `<tr><td><span class="qno ${wr[i]!=null&&wr[i]>=50?'x':''}">${it.no}</span></td><td>${pill(it.cat)}</td><td>${esc(it.sub)}</td><td>${circled(+it.answer)}</td><td>${it.points}</td>
           <td><b>${wr[i]==null?'-':wr[i]+'%'}</b></td>
-          <td>${oxOnly(ex)?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr>`;
+          <td>${oxOnly(ex)||rs.some(r=>/[ox]/.test(r.answers))?'<span class="muted">정오표만 있어 선지 정보 없음</span>':`<div class="dist">${[1,2,3,4,5].map(n=>`<span class="${n===+it.answer?'c':''}">${pct(cnt[n],rs.length)}%</span>`).join('')}<span>${pct(cnt[0],rs.length)}%</span></div>`}</td></tr>`;
       }).join('')}
       </tbody></table>`}
     </div>
