@@ -1535,6 +1535,7 @@ async function loadQsrcBuf(examId){
 const wEls=(node,name)=>[...node.getElementsByTagNameNS(W_NS,name)];
 const wText=e=>wEls(e,'t').map(t=>t.textContent).join('');
 const GROUP_RE=/^\[(\d{1,2})\s*[~∼～-]\s*(\d{1,2})[^\]]*\]/;   // [31~34], [41~42 단일 장문]
+const groupMatch=t=>t.match(GROUP_RE) || t.match(/^\[(\d{2})(\d{2})(?!\d)[^\]]*\]/);   // "[4345] 복합 장문"처럼 ~가 빠진 경우
 async function parseDocx(buf){
   if(!window.JSZip) throw new Error('워드 처리 도구를 불러오지 못했어요. 인터넷 연결을 확인하세요.');
   const zip=await JSZip.loadAsync(buf);
@@ -1546,9 +1547,9 @@ async function parseDocx(buf){
     const e=els[i]; const t=wText(e).trim();
     if(e.localName==='p'){
       const m=t.match(/^(\d{1,2})\s*\./); if(m){ const n=+m[1]; if(n>=1&&n<=45&&!(n in starts)) starts[n]=i; }
-      const g=t.match(GROUP_RE); if(g) groups.push([+g[1],+g[2],i]);
+      const g=groupMatch(t); if(g) groups.push([+g[1],+g[2],i]);
     }
-    if(starts[45]!=null && i>starts[45] && (t.includes('확인 사항') || /정답$/.test(t))){ end=i; break; }
+    if(starts[45]!=null && i>starts[45] && (t.includes('확인 사항') || /정답$/.test(t) || /^정답\s*(및|과)?\s*해설/.test(t))){ end=i; break; }
     if(e.localName==='sectPr'){ end=i; break; }
   }
   const marks=[...new Set([...Object.values(starts),...groups.map(g=>g[2]),end])].sort((a,b)=>a-b);
@@ -1562,7 +1563,7 @@ async function parseDocx(buf){
     if(e.localName!=='p') continue;
     const t=wText(e).trim();
     const m=t.match(/^(\d{1,2})\s*\./); if(m && +m[1]>last && +m[1]<=45){ hs[+m[1]]=i; last=+m[1]; continue; }
-    const g=t.match(GROUP_RE); if(g) hg.push([+g[1],+g[2],i]);
+    const g=groupMatch(t); if(g) hg.push([+g[1],+g[2],i]);
   }
   const hmarks=[...new Set([...Object.values(hs),...hg.map(g=>g[2]),docEnd])].sort((a,b)=>a-b);
   const hnxt=i=>hmarks.find(m=>m>i)??docEnd;
