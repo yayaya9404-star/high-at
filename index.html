@@ -212,7 +212,14 @@ const DB = {
     return LS.get('mx_responses',[]).filter(x=>x.exam_id===examId);
   },
   async saveResponse(r){
-    if(sb){ const {data,error}=await sb.from('mx_responses').upsert(r).select().single(); if(error) throw error; return data; }
+    if(sb){
+      let {data,error}=await sb.from('mx_responses').upsert(r).select().single();
+      if(error && /teacher/.test(error.message||'') && 'teacher' in r){   // teacher 열을 아직 안 만든 경우: 담임 없이 저장
+        if(!window._warnTeacherCol){ window._warnTeacherCol=true; alert('Supabase에 담임 기록 열이 없어 담임 없이 저장해요.\nSQL Editor에서 실행해 주세요:\nalter table mx_responses add column if not exists teacher text;'); }
+        const {teacher, ...rest}=r; ({data,error}=await sb.from('mx_responses').upsert(rest).select().single());
+      }
+      if(error) throw error; return data;
+    }
     const all=LS.get('mx_responses',[]); const i=all.findIndex(x=>x.id===r.id);
     if(i>=0) all[i]=r; else all.push(r); LS.set('mx_responses',all); return r;
   },
@@ -679,7 +686,7 @@ function bindImport(){
         for(const r of G.rows){
           const answers=r.answers.map(a=>a?'o':'x').join('');
           const resp={id:uid(), exam_id:ex.id, branch:d.branch, class_name:r.match?r.match.class_name:r.course,
-            student_name:r.name||`${r.course} ${r.num}번`, member_code:r.match&&r.match.member_code||null, answers, score:gradeAnswers(ex,answers).score};
+            student_name:r.name||`${r.course} ${r.num}번`, member_code:r.match&&r.match.member_code||null, teacher:r.match&&r.match.teacher||'', answers, score:gradeAnswers(ex,answers).score};
           if(!sb) resp.created_at=nowIso();
           await DB.saveResponse(resp); n++;
         }
@@ -744,8 +751,43 @@ async function renderRosterTab(){
           return `<tr><td><b>${esc(c||'-')}</b></td><td>${esc([...new Set(ss.map(s=>s.teacher).filter(Boolean))].join(', ')||'-')}</td><td>${ss.length}</td><td>${Object.entries(gc).map(([g,n])=>esc(g)+' '+n).join(' · ')}</td><td class="muted">${ss.map(s=>esc(s.student_name)).join(', ')}</td></tr>`; }).join('')}
       </tbody></table>`:'<p class="muted">아직 명단이 없습니다.</p>'}
     </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h2>회차별 담임 기록 · ${esc(br)}</h2>
+    <p class="muted">답안에는 입력할 때의 담임이 저장돼요. 이미 입력된 회차의 담임을 채우거나 바로잡을 때 쓰세요.</p>
+    <div class="row">
+      <label class="f">회차<select id="tbRound"><option value="*">전체 회차</option>${allRounds().map(k=>`<option value="${k}">${roundLabel(k)}</option>`).join('')}</select></label>
+      <button class="btn" id="tbFill" style="align-self:flex-end">빈 담임을 지금 명단으로 채우기</button>
+      <label class="f">그 시기 명단(회원코드·담임)으로 덮어쓰기<input type="file" id="tbFile" accept=".xlsx,.xls,.csv"></label>
+    </div>
+    <p class="muted" id="tbMsg"></p>
   </div>`;
   $('#rBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderRosterTab(); };
+  // 회차별 담임 기록 채우기
+  const tbTargets=async()=>{ const rk=$('#tbRound').value, out=[];
+    for(const ex of EXAMS){ if(rk!=='*' && roundKey(ex)!==rk) continue; (await getResponses(ex.id,true)).filter(r=>r.branch===br).forEach(r=>out.push(r)); } return out; };
+  const tbApply=async(list,label)=>{ for(const r of list) await DB.saveResponse(r); Object.keys(resCache).forEach(k=>delete resCache[k]); $('#tbMsg').textContent=`${label} ${list.length}건 저장했어요.`; };
+  $('#tbFill').onclick=async()=>{
+    const rs=(await tbTargets()).filter(r=>!r.teacher), changed=[];
+    rs.forEach(r=>{ const t=(rosterOf(r,list)||{}).teacher; if(t){ r.teacher=t; changed.push(r); } });
+    if(!changed.length) return alert('채울 답안이 없어요. (이미 담임이 있거나, 명단에서 담임을 찾지 못함)');
+    if(!confirm(`담임이 비어 있는 답안 ${changed.length}건을 지금 명단의 담임으로 채울까요?`)) return;
+    try{ await tbApply(changed,'담임 채움'); }catch(err){ alert('저장 실패: '+err.message); }
+  };
+  $('#tbFile').onchange=async e=>{
+    const f=e.target.files[0]; if(!f) return;
+    try{
+      if($('#tbRound').value==='*' && !confirm('전체 회차에 이 명단의 담임을 덮어씁니다. 특정 회차만 바꾸려면 먼저 회차를 고르세요. 계속할까요?')) return;
+      const d=await readSheet(f); if(d.map.teacher<0) throw new Error('담임 열을 찾지 못했어요.');
+      const old=draftRows(d); const rs=await tbTargets(), changed=[];
+      rs.forEach(r=>{ const m=old.find(s=>r.member_code&&s.member_code===r.member_code) || old.find(s=>s.student_name===r.student_name&&(!s.class_name||s.class_name===r.class_name));
+        if(m&&m.teacher&&m.teacher!==r.teacher){ r.teacher=m.teacher; changed.push(r); } });
+      if(!changed.length) return alert('바뀔 답안이 없어요.');
+      if(!confirm(`${changed.length}건의 담임을 이 명단 기준으로 바꿀까요?`)) return;
+      await tbApply(changed,'담임 변경');
+    }catch(err){ alert(err.message); }
+    e.target.value='';
+  };
   $('#rFile').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
     if(!window.XLSX) return alert('엑셀 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
@@ -959,7 +1001,10 @@ async function saveOmr(ex, onSaved){
     if(!confirm(`${prefs.branch} ${cls} ${name} 학생 답안이 이미 있습니다. 덮어쓸까요?`)) return;
     id=dup.id;
   }
-  const rec={id:id||uid(), exam_id:ex.id, branch:prefs.branch, class_name:cls, student_name:name, member_code:code||null, answers, score:gradeAnswers(ex,answers).score};
+  const prevRec=id?rs.find(r=>r.id===id):null;
+  const rosterNow=await getStudents(prefs.branch);
+  const teacher=(prevRec&&prevRec.teacher) || ((rosterOf({member_code:code,student_name:name,class_name:cls},rosterNow)||{}).teacher) || '';   // 입력 시점 담임 기록
+  const rec={id:id||uid(), exam_id:ex.id, branch:prefs.branch, class_name:cls, student_name:name, member_code:code||null, teacher, answers, score:gradeAnswers(ex,answers).score};
   if(!sb) rec.created_at=nowIso();
   omrSaving=true;
   try{
@@ -1200,8 +1245,8 @@ async function renderHistBody(code, list){
 
   // 시험별 표
   const cats=[...new Set(rows.flatMap(o=>Object.keys(o.cs)))].sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
-  const table=`<h3>시험별 기록</h3><div style="overflow:auto"><table><thead><tr><th>시행일</th><th>시험</th><th>점수</th><th>분원 평균</th><th>분원 석차</th>${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
-    ${rows.map((o,i)=>`<tr class="click" data-hrep="${i}"><td>${esc(o.date||'-')}</td><td>${esc(o.ex.name)}</td><td><b>${o.r.score}</b><span class="muted">/${o.tp}</span></td><td>${o.avgBr.toFixed(1)}</td><td>${o.rankBr}/${o.nBr}</td>
+  const table=`<h3>시험별 기록</h3><div style="overflow:auto"><table><thead><tr><th>시행일</th><th>시험</th><th>담임</th><th>점수</th><th>분원 평균</th><th>분원 석차</th>${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((o,i)=>`<tr class="click" data-hrep="${i}"><td>${esc(o.date||'-')}</td><td>${esc(o.ex.name)}</td><td>${esc(teacherOf(o.r,list)||'-')}</td><td><b>${o.r.score}</b><span class="muted">/${o.tp}</span></td><td>${o.avgBr.toFixed(1)}</td><td>${o.rankBr}/${o.nBr}</td>
       ${cats.map(c=>o.cs[c]?`<td>${pct(o.cs[c].ok,o.cs[c].n)}%</td>`:'<td class="muted">-</td>').join('')}</tr>`).join('')}
   </tbody></table></div><p class="muted">시험을 누르면 그 시험의 개인 리포트가 열립니다.</p>`;
 
@@ -1226,9 +1271,14 @@ const ADM_GRADES=['고1','고2','고3'];
 // 수능 영어 절대평가: 90↑ 1등급, 80↑ 2등급 … (100점 환산)
 function engGrade(score, ex){ const t=totalPoints(ex)||100, v=score/t*100; return v>=90?1:v>=80?2:v>=70?3:v>=60?4:v>=50?5:v>=40?6:v>=30?7:v>=20?8:9; }
 const bucketOf = g => Math.min(g,5)-1;   // 0..4 (5 = 5등급 이하)
-let admExam={}, admGrade='고1', admBranch=null;
+let admRound=null, admPick={}, admGrade='고1', admBranch=null;
 
-function admExamsOf(g){ return EXAMS.filter(e=>normGrade(e.grade)===g).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
+// 회차: 시행일 기준 — 2월 1회, 5월 2회, 8월 3회, 11월 4회 (1~3월→1회, 4~6월→2회, 7~9월→3회, 10~12월→4회)
+const ROUND_MONTH=[2,5,8,11];
+function roundKey(ex){ const d=ex&&ex.exam_date; if(!d) return ''; const y=+d.slice(0,4), m=+d.slice(5,7); if(!y||!m) return ''; return `${y}-${Math.ceil(m/3)}`; }
+function roundLabel(k){ if(!k) return '시행일 없음'; const [y,r]=k.split('-'); return `${y}년 ${r}회차 (${ROUND_MONTH[r-1]}월)`; }
+const allRounds = () => [...new Set(EXAMS.map(roundKey))].sort((a,b)=>koCmp(b,a));   // 최신 회차 먼저
+function admExamsOf(g, rk){ return EXAMS.filter(e=>normGrade(e.grade)===g && roundKey(e)===rk).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
 function gradeCounts(list, ex){ const c=[0,0,0,0,0]; list.forEach(r=>c[bucketOf(engGrade(r.score,ex))]++); return c; }
 // 행 하나: 응시 + 등급별 (인원 | %)
 function gradeRow(label, cnt, n, strong){
@@ -1237,17 +1287,30 @@ function gradeRow(label, cnt, n, strong){
 const gradeHead = first => `<thead><tr><th rowspan="2">${first}</th><th rowspan="2">응시</th>${GRADE_COLS.map(c=>`<th colspan="2" style="text-align:center">${c}</th>`).join('')}</tr>
   <tr>${GRADE_COLS.map(()=>'<th>인원</th><th>%</th>').join('')}</tr></thead>`;
 
-// 응답 → 현재 명단(담임·반) 연결
+// 응답 → 현재 명단(반·담임) 연결
 function rosterOf(r, roster){
   return roster.find(s=>r.member_code && s.member_code===r.member_code) || roster.find(s=>s.student_name===r.student_name && s.class_name===r.class_name) || null;
 }
+// 담임: 답안에 기록된 그때 담임 → 없으면 현재 명단
+const teacherOf = (r, roster) => r.teacher || ((rosterOf(r,roster||[])||{}).teacher) || '';
+const stuIdOf = r => r.member_code || ('n:'+r.branch+'|'+r.student_name);
 
 async function renderAdminTab(){
   if(!admBranch) admBranch=prefs.branch;
-  ADM_GRADES.forEach(g=>{ if(!(g in admExam) || (admExam[g] && !examById(admExam[g]))){ const l=admExamsOf(g); admExam[g]=l.length?l[0].id:''; } });
-  const data={};   // 학년 → {ex, all}
-  for(const g of ADM_GRADES){ const ex=admExam[g]?examById(admExam[g]):null; data[g]={ex, all:ex?await getResponses(ex.id):[]}; }
+  const rounds=allRounds();
+  if(!admRound || !rounds.includes(admRound)) admRound=rounds[0]||'';
   const rosters={}; for(const b of BRANCHES) rosters[b]=await getStudents(b);
+  const data={};   // 학년 → {ex, all, choices}
+  for(const g of ADM_GRADES){
+    const choices=admExamsOf(g, admRound);
+    let ex=choices.find(e=>e.id===admPick[admRound+'|'+g])||null;
+    if(!ex){ // 같은 회차에 같은 학년 시험이 여럿이면 응시자가 많은 시험
+      let best=null, bn=-1; for(const e of choices){ const n=(await getResponses(e.id)).length; if(n>bn){ best=e; bn=n; } } ex=best;
+    }
+    data[g]={ex, all:ex?await getResponses(ex.id):[], choices};
+  }
+  const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
+  const diffTag=d=>`<b class="${d>0?'mark-o':d<0?'mark-x':''}">${d>0?'▲':d<0?'▼':''}${Math.abs(d).toFixed(1)}</b>`;
 
   // ① 분원별 등급 분석 (행: 학년)
   const t1=ADM_GRADES.map(g=>{ const {ex,all}=data[g]; const l=ex?all.filter(r=>r.branch===admBranch):[]; return {g,cnt:ex?gradeCounts(l,ex):[0,0,0,0,0],n:l.length}; });
@@ -1267,36 +1330,50 @@ async function renderAdminTab(){
   const mine=G.ex?G.all.filter(r=>r.branch===admBranch):[];
   const prevEx=G.ex?(()=>{ const id=defaultCmp(G.ex); return id?examById(id):null; })():null;
   const prevAll=prevEx?await getResponses(prevEx.id):[];
-  const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
-  const rowsWithT=mine.map(r=>{ const st=rosterOf(r,rosters[admBranch]||[]); return {r, cls:st?st.class_name:r.class_name, teacher:st&&st.teacher||'', prev:prevAll.find(p=>sameResp(p,r))}; });
+  const rowsWithT=mine.map(r=>({r, cls:r.class_name, teacher:teacherOf(r,rosters[admBranch]), prev:prevAll.find(p=>sameResp(p,r))}));
   const byCls={}; rowsWithT.forEach(x=>(byCls[x.cls||'-']=byCls[x.cls||'-']||[]).push(x));
 
-  // ⑤ 담임별 성과 (선택 분원, 고1~고3 선택 시험 전체)
+  // ⑤ 담임별 성과 (이번 회차, 선택 분원) — 담임은 그 시험 때 기록된 담임
   const tStat={};
   for(const g of ADM_GRADES){
     const {ex,all}=data[g]; if(!ex) continue;
     const pEx=(()=>{ const id=defaultCmp(ex); return id?examById(id):null; })(); const pAll=pEx?await getResponses(pEx.id):[];
     all.filter(r=>r.branch===admBranch).forEach(r=>{
-      const st=rosterOf(r,rosters[admBranch]||[]), t=(st&&st.teacher)||'(담임 미지정)';
+      const t=teacherOf(r,rosters[admBranch])||'(담임 미지정)';
       const o=tStat[t]=tStat[t]||{n:0,sum:0,g1:0,g2:0,grow:0,gn:0,cls:new Set()};
-      const gr=engGrade(r.score,ex); o.n++; o.sum+=to100(r.score,ex); if(gr===1) o.g1++; if(gr<=2) o.g2++; o.cls.add(`${g} ${st?st.class_name:r.class_name}`);
+      const gr=engGrade(r.score,ex); o.n++; o.sum+=to100(r.score,ex); if(gr===1) o.g1++; if(gr<=2) o.g2++; o.cls.add(`${g} ${r.class_name}`);
       const p=pAll.find(x=>sameResp(x,r)); if(p){ o.grow+=to100(r.score,ex)-to100(p.score,pEx); o.gn++; }
     });
   }
-  const diffTag=d=>`<b class="${d>0?'mark-o':d<0?'mark-x':''}">${d>0?'▲':d<0?'▼':''}${Math.abs(d).toFixed(1)}</b>`;
-  const noTeacher=!(rosters[admBranch]||[]).some(s=>s.teacher);
+
+  // ⑥ 담임 × 회차 (선택 분원, 전체 회차) + 담당 기간 성장
+  const allResp=[];   // {r, ex, rk, t}
+  for(const ex of EXAMS){ const rk=roundKey(ex); for(const r of (await getResponses(ex.id)).filter(r=>r.branch===admBranch)) allResp.push({r,ex,rk,t:teacherOf(r,rosters[admBranch])||'(담임 미지정)'}); }
+  const roundCols=[...new Set(allResp.map(x=>x.rk))].sort(koCmp);
+  const tr={};   // 담임 → 회차 → {n,sum,g1}
+  allResp.forEach(x=>{ const o=((tr[x.t]=tr[x.t]||{})[x.rk]=tr[x.t][x.rk]||{n:0,sum:0,g1:0}); o.n++; o.sum+=to100(x.r.score,x.ex); if(engGrade(x.r.score,x.ex)===1) o.g1++; });
+  // 학생별 시간순 → 연속한 두 시험의 점수 변화를 '뒤 시험 때 담임'의 몫으로
+  const byStu={}; allResp.forEach(x=>(byStu[stuIdOf(x.r)]=byStu[stuIdOf(x.r)]||[]).push(x));
+  const tg={};   // 담임 → {sum,n,stu:Set}
+  Object.values(byStu).forEach(list=>{ list.sort((a,b)=>koCmp(examDateKey(a.ex),examDateKey(b.ex)));
+    for(let i=1;i<list.length;i++){ const a=list[i-1], b=list[i]; if(examDateKey(a.ex)===examDateKey(b.ex)) continue;
+      const o=tg[b.t]=tg[b.t]||{sum:0,n:0,stu:new Set()}; o.sum+=to100(b.r.score,b.ex)-to100(a.r.score,a.ex); o.n++; o.stu.add(stuIdOf(b.r)); } });
+  const teachers=[...new Set([...Object.keys(tr),...Object.keys(tg)])].sort((a,b)=>a.startsWith('(')-b.startsWith('(')||koCmp(a,b));
+  const noTeacher=!(rosters[admBranch]||[]).some(s=>s.teacher) && !allResp.some(x=>x.r.teacher);
 
   $('#tab-admin').innerHTML=`
   <div class="card">
     <div class="row">
-      ${ADM_GRADES.map(g=>`<label class="f" style="flex:1;min-width:200px">${g} 시험<select data-admex="${g}"><option value="">(없음)</option>${admExamsOf(g).map(e=>`<option value="${e.id}" ${e.id===admExam[g]?'selected':''}>${esc(e.name)}${e.exam_date?' ('+esc(e.exam_date)+')':''}</option>`).join('')}</select></label>`).join('')}
+      <label class="f" style="min-width:220px">회차<select id="admRound">${rounds.map(k=>`<option value="${k}" ${k===admRound?'selected':''}>${roundLabel(k)}</option>`).join('')||'<option>시험 없음</option>'}</select></label>
       <label class="f">분원<select id="admBranch">${BRANCHES.map(b=>`<option ${b===admBranch?'selected':''}>${b}</option>`).join('')}</select></label>
+      ${ADM_GRADES.filter(g=>data[g].choices.length>1).map(g=>`<label class="f" style="min-width:220px">${g} 시험 (이 회차에 ${data[g].choices.length}개)<select data-admpick="${g}">${data[g].choices.map(e=>`<option value="${e.id}" ${data[g].ex&&e.id===data[g].ex.id?'selected':''}>${esc(e.name)}</option>`).join('')}</select></label>`).join('')}
     </div>
-    <p class="muted" style="margin-top:6px">등급은 수능 영어 절대평가 기준(100점 환산 90점↑ 1등급, 80점↑ 2등급 …)입니다.</p>
+    <p class="muted" style="margin-top:6px">${ADM_GRADES.map(g=>`${g}: ${data[g].ex?esc(data[g].ex.name):'<span class="muted">없음</span>'}`).join(' · ')}<br>
+      회차는 시행일로 정해요 (2월 1회 · 5월 2회 · 8월 3회 · 11월 4회). 등급은 수능 영어 절대평가 기준(100점 환산 90점↑ 1등급, 80점↑ 2등급 …)입니다.</p>
   </div>
 
   <div class="card" style="margin-top:14px">
-    <h2>등급 분석 · ${esc(admBranch)}</h2>
+    <h2>등급 분석 · ${esc(admBranch)} · ${roundLabel(admRound)}</h2>
     <div style="overflow:auto"><table class="adm">${gradeHead('학년')}<tbody>
       ${t1.map(x=>gradeRow(x.g+(data[x.g].ex?'':' <span class="muted">(시험 없음)</span>'),x.cnt,x.n)).join('')}
       ${gradeRow('합계',t1sum.cnt,t1sum.n,true)}
@@ -1306,7 +1383,7 @@ async function renderAdminTab(){
   <div class="card" style="margin-top:14px">
     <div class="row" style="justify-content:space-between"><h2 style="margin:0">전체 분원 비교</h2>
       <div class="subtabs" style="margin:0">${ADM_GRADES.map(g=>`<button data-admg="${g}" class="${g===admGrade?'active':''}">${g}</button>`).join('')}</div></div>
-    ${G.ex?`<p class="muted" style="margin:6px 0 10px">${esc(G.ex.name)}</p>`:`<p class="muted">${admGrade} 시험을 위에서 골라주세요.</p>`}
+    ${G.ex?`<p class="muted" style="margin:6px 0 10px">${esc(G.ex.name)}</p>`:`<p class="muted">이 회차에 ${admGrade} 시험이 없어요.</p>`}
     <div style="overflow:auto"><table class="adm">${gradeHead('분원')}<tbody>
       ${t2.map(x=>gradeRow(x.b+(x.b===admBranch?' ★':''),x.cnt,x.n)).join('')}
       ${gradeRow('전체',t2sum.cnt,t2sum.n,true)}
@@ -1320,7 +1397,7 @@ async function renderAdminTab(){
 
   <div class="card" style="margin-top:14px">
     <h2>반별 성적 · ${esc(admBranch)} ${admGrade}</h2>
-    <p class="muted" style="margin:-6px 0 10px">반에서 가장 높은 점수는 <b style="color:#1d4ed8">파란색</b>, 가장 낮은 점수는 <b style="color:var(--bad)">빨간색</b>. 반·담임은 현재 학생 명단 기준입니다.${prevEx?` 변화는 ${esc(prevEx.name)} 대비.`:''}</p>
+    <p class="muted" style="margin:-6px 0 10px">반에서 가장 높은 점수는 <b style="color:#1d4ed8">파란색</b>, 가장 낮은 점수는 <b style="color:var(--bad)">빨간색</b>. 반·담임은 시험 볼 때 기준입니다.${prevEx?` 변화는 ${esc(prevEx.name)} 대비.`:''}</p>
     ${Object.keys(byCls).length?`<div class="grid-cls">${Object.keys(byCls).sort(koCmp).map(c=>{
       const L=byCls[c].sort((a,b)=>b.r.score-a.r.score), mx=L[0].r.score, mn=L[L.length-1].r.score, avg=L.reduce((s,x)=>s+x.r.score,0)/L.length;
       const ts=[...new Set(L.map(x=>x.teacher).filter(Boolean))].join(', ');
@@ -1332,19 +1409,29 @@ async function renderAdminTab(){
   </div>
 
   <div class="card" style="margin-top:14px">
-    <h2>담임별 성과 · ${esc(admBranch)}</h2>
-    ${noTeacher?'<p class="total bad" style="margin-top:-6px">학생 명단에 담임 열이 없어요. 담임 열을 추가한 명단을 다시 올려주세요.</p>':''}
-    <p class="muted" style="margin:-6px 0 10px">위에서 고른 고1~고3 시험을 합산. 성장은 같은 학생의 직전 시험 대비 평균 점수 변화(100점 환산)이며, 비교 가능한 학생 수를 함께 표시합니다.</p>
+    <h2>담임별 성과 · ${esc(admBranch)} · ${roundLabel(admRound)}</h2>
+    ${noTeacher?'<p class="total bad" style="margin-top:-6px">담임 정보가 없어요. 담임 열을 추가한 명단을 올려주세요.</p>':''}
+    <p class="muted" style="margin:-6px 0 10px">이번 회차 고1~고3 합산. 성장은 같은 학생의 직전 시험 대비 평균 점수 변화(100점 환산)이며, 비교 가능한 학생 수를 함께 표시합니다.</p>
     <div style="overflow:auto"><table><thead><tr><th>담임</th><th>담당 반</th><th>학생 수</th><th>평균 점수</th><th>1등급 비율</th><th>2등급 이내</th><th>평균 성장</th></tr></thead><tbody>
       ${Object.entries(tStat).sort((a,b)=>b[1].n-a[1].n).map(([t,o])=>`<tr><td><b>${esc(t)}</b></td><td class="muted">${[...o.cls].sort(koCmp).map(esc).join(', ')}</td><td>${o.n}</td><td>${(o.sum/o.n).toFixed(1)}</td>
         <td><b>${pct(o.g1,o.n)}%</b> <span class="muted">(${o.g1}명)</span></td><td>${pct(o.g2,o.n)}% <span class="muted">(${o.g2}명)</span></td>
         <td>${o.gn?`${diffTag(o.grow/o.gn)} <span class="muted">(${o.gn}명)</span>`:'<span class="muted">지난 기록 없음</span>'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">응답이 없습니다.</td></tr>'}
     </tbody></table></div>
-    <p class="muted" style="margin-top:8px">학생 수가 적은 담임은 한두 명 점수로 비율이 크게 달라지니 인원과 함께 보세요.</p>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>담임 누적 · ${esc(admBranch)} · 전체 회차</h2>
+    <p class="muted" style="margin:-6px 0 10px">칸마다 <b>평균 점수</b> · 1등급 비율 · 학생 수. 담당 기간 성장은 학생이 연달아 본 두 시험의 점수 변화를 <b>뒤 시험 때 담임</b>의 몫으로 모아 평균 낸 값이에요 (담임이 바뀐 학생은 바뀐 뒤부터 새 담임에게).</p>
+    <div style="overflow:auto"><table class="adm"><thead><tr><th>담임</th>${roundCols.map(k=>`<th>${roundLabel(k)}</th>`).join('')}<th>담당 기간 성장</th></tr></thead><tbody>
+      ${teachers.map(t=>`<tr><td><b>${esc(t)}</b></td>${roundCols.map(k=>{ const o=tr[t]&&tr[t][k]; return o?`<td><b>${(o.sum/o.n).toFixed(1)}</b><br><span class="muted">1등급 ${pct(o.g1,o.n)}% · ${o.n}명</span></td>`:'<td class="muted">-</td>'; }).join('')}
+        <td>${tg[t]?`${diffTag(tg[t].sum/tg[t].n)}<br><span class="muted">학생 ${tg[t].stu.size}명 · ${tg[t].n}건</span>`:'<span class="muted">-</span>'}</td></tr>`).join('') || `<tr><td colspan="${roundCols.length+2}" class="muted">응답이 없습니다.</td></tr>`}
+    </tbody></table></div>
+    <p class="muted" style="margin-top:8px">학생 수가 적은 담임은 한두 명 점수로 숫자가 크게 달라지니 인원과 함께 보세요.</p>
   </div>`;
 
-  document.querySelectorAll('[data-admex]').forEach(s=>s.onchange=()=>{ admExam[s.dataset.admex]=s.value; renderAdminTab(); });
+  $('#admRound').onchange=e=>{ admRound=e.target.value; renderAdminTab(); };
   $('#admBranch').onchange=e=>{ admBranch=e.target.value; renderAdminTab(); };
+  document.querySelectorAll('[data-admpick]').forEach(s=>s.onchange=()=>{ admPick[admRound+'|'+s.dataset.admpick]=s.value; renderAdminTab(); });
   document.querySelectorAll('[data-admg]').forEach(b=>b.onclick=()=>{ admGrade=b.dataset.admg; renderAdminTab(); });
 }
 
@@ -1672,7 +1759,8 @@ async function openAnswerImport(ex){
           for(const p of todo){
             const rec={id:p.old?p.old.id:uid(), exam_id:ex.id, branch:prefs.branch,
               class_name:p.old?p.old.class_name:(p.st?p.st.class_name:''), student_name:p.old?p.old.student_name:(p.st?p.st.student_name:p.name),
-              member_code:p.old?p.old.member_code:(p.st&&p.st.member_code||p.code||null), answers:p.answers, score:p.score};
+              member_code:p.old?p.old.member_code:(p.st&&p.st.member_code||p.code||null),
+              teacher:(p.old&&p.old.teacher) || (p.st&&p.st.teacher) || ((p.old&&rosterOf(p.old,roster))||{}).teacher || '', answers:p.answers, score:p.score};
             if(!sb) rec.created_at=(p.old&&p.old.created_at)||nowIso();
             await DB.saveResponse(rec);
           }
