@@ -1808,13 +1808,43 @@ async function buildWorksheet(title, list, withHae=false){
   [...body.children].forEach(e=>{ if(e!==sect) body.removeChild(e); });
   const put=node=>body.insertBefore(node,sect||null);
   const para=(text,{bold=false,size=0,pageBreak=false}={})=>{
-    const x=`<w:p xmlns:w="${W_NS}">${pageBreak?'<w:r><w:br w:type="page"/></w:r>':''}<w:r><w:rPr>${bold?'<w:b/>':''}${size?`<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`:''}</w:rPr><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>`;
+    // 줄 간격을 '자동'으로 — 원본 문서의 '고정 줄 간격'을 물려받으면 큰 제목 윗부분이 잘림
+    const x=`<w:p xmlns:w="${W_NS}"><w:pPr><w:spacing w:before="${size?120:0}" w:after="${size?100:40}" w:line="264" w:lineRule="auto"/></w:pPr>${pageBreak?'<w:r><w:br w:type="page"/></w:r>':''}<w:r><w:rPr>${bold?'<w:b/>':''}${size?`<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`:''}</w:rPr><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>`;
     return doc.importNode(new DOMParser().parseFromString(x,'application/xml').documentElement,true);
   };
   put(para(title,{bold:true,size:32}));
   let imgN=0; const relRoot=rels.documentElement;
-  const answers=[];
-  const putEl=async(Q,i)=>{
+  // 단 너비(twip) — 표가 단 밖으로 밀리지 않게 맞출 때 사용
+  const colW=(()=>{ const sz=sect&&wEls(sect,'pgSz')[0], mg=sect&&wEls(sect,'pgMar')[0];
+    const w=sz?+sz.getAttributeNS(W_NS,'w'):11906, l=mg?+mg.getAttributeNS(W_NS,'left'):1134, r=mg?+mg.getAttributeNS(W_NS,'right'):1134;
+    return Math.max(3000,Math.floor((w-l-r-420)/2)); })();
+  const wEl=(name,attrs={})=>{ const e=doc.createElementNS(W_NS,'w:'+name); Object.entries(attrs).forEach(([k,v])=>e.setAttributeNS(W_NS,'w:'+k,String(v))); return e; };
+  const pPrOf=pEl=>{ let pr=[...pEl.children].find(c=>c.localName==='pPr'); if(!pr){ pr=wEl('pPr'); pEl.insertBefore(pr,pEl.firstChild); } return pr; };
+  const setFlag=(pEl,name)=>{ const pr=pPrOf(pEl); if(![...pr.children].some(c=>c.localName===name)) pr.insertBefore(wEl(name),pr.firstChild); };
+  // 표: 단 너비에 맞추기 (원본의 고정 너비·들여쓰기 제거)
+  const fitTable=tbl=>{
+    const pr=[...tbl.children].find(c=>c.localName==='tblPr');
+    if(pr){ [...pr.children].filter(c=>['tblW','tblInd','tblLayout','tblpPr'].includes(c.localName)).forEach(c=>pr.removeChild(c));
+      pr.appendChild(wEl('tblW',{w:5000,type:'pct'})); pr.appendChild(wEl('tblLayout',{type:'autofit'})); }
+    const grid=[...tbl.children].find(c=>c.localName==='tblGrid');
+    if(grid){ const gc=[...grid.children].filter(c=>c.localName==='gridCol'); const sum=gc.reduce((t,c)=>t+(+c.getAttributeNS(W_NS,'w')||0),0);
+      if(sum>colW) gc.forEach(c=>c.setAttributeNS(W_NS,'w:w',String(Math.floor((+c.getAttributeNS(W_NS,'w')||0)*colW/sum)))); }
+    wEls(tbl,'tcW').forEach(c=>{ c.setAttributeNS(W_NS,'w:type','auto'); c.setAttributeNS(W_NS,'w:w','0'); });
+  };
+  // 맨 앞 글자 바꾸기 (예: "24." → "3.", "[41~42" → "[7~8") — 여러 run에 나뉘어 있어도 처리
+  const replaceLead=(node,re,rep)=>{
+    const ts=wEls(node,'t'); const full=ts.map(t=>t.textContent).join(''); const m=full.match(re); if(!m) return false;
+    let left=m[0].length, first=null;
+    for(const t of ts){ if(!left) break; const tx=t.textContent; if(first===null&&tx.length) first=t; const k=Math.min(left,tx.length); t.textContent=tx.slice(k); left-=k; }
+    const r=typeof rep==='function'?rep(m):rep;
+    (first||ts[0]).textContent=r+(first||ts[0]).textContent; (first||ts[0]).setAttributeNS('http://www.w3.org/XML/1998/namespace','xml:space','preserve'); return true;
+  };
+  // 출처: 회색 작은 글씨로 문단 끝에
+  const addSrc=(pEl,text)=>{ if(pEl.localName!=='p') return;
+    const r=wEl('r'), rp=wEl('rPr'); rp.appendChild(wEl('color',{val:'9A9A9A'})); rp.appendChild(wEl('sz',{val:16})); rp.appendChild(wEl('szCs',{val:16})); r.appendChild(rp);
+    const t=wEl('t'); t.setAttributeNS('http://www.w3.org/XML/1998/namespace','xml:space','preserve'); t.textContent=`  (${text})`; r.appendChild(t); pEl.appendChild(r); };
+  const blank=()=>put(para(''));
+  const imp=async(Q,i)=>{
         const node=doc.importNode(Q.els[i],true);
         [...node.getElementsByTagNameNS(W_NS,'sectPr')].forEach(s=>s.parentNode.removeChild(s));
         if(Q!==base){   // 다른 시험지의 그림은 파일과 연결을 새로 만듦
@@ -1830,29 +1860,68 @@ async function buildWorksheet(title, list, withHae=false){
             }
           }
         }
-        put(node);
+        if(node.localName==='tbl') fitTable(node); wEls(node,'tbl').forEach(fitTable);
+        return node;
   };
+  // 새 번호: 1번부터 차례로 (출처는 회색 글씨로)
+  const newNo=new Map(); let k=0; byEx.forEach(g=>g.nums.forEach(n=>newNo.set(g.ex.id+'|'+n,++k)));
+  const NO_RE=/^\s*\d{1,2}\s*\./, GRP_RE=/^\s*\[\s*(?:\d{1,2}\s*[~∼～-]\s*\d{1,2}|\d{4}(?!\d))([^\]]*)\]\s*/;
+  // 묶음 머리말 번호도 새 번호로. 문항이 하나만 뽑혔으면 문제지에서는 [ ]를 빼고, 해설에서는 [7번 단일 장문]처럼
+  const rangeOf=(g,grp,isHae)=>m=>{ const ns=g.nums.filter(n=>grp.a<=n&&n<=grp.b).map(n=>newNo.get(g.ex.id+'|'+n)), lab=m[1]||'';
+    if(ns.length>1) return `[${ns[0]}~${ns[ns.length-1]}${lab}] `;
+    return isHae?`[${ns[0]}번${lab}] `:''; };
+  const isEmptyP=n=>n.localName==='p'&&!wText(n).trim()&&![...n.getElementsByTagName('*')].some(e=>['drawing','pict','object'].includes(e.localName));
+  // 문항 하나를 통째로: 같은 단(쪽)에 붙어 있도록 '다음 단락과 함께' 설정
+  const putChunk=nodes=>{
+    nodes.forEach((n,j)=>{ if(j===nodes.length-1&&n.localName==='p') return;
+      const ps=n.localName==='p'?[n]:wEls(n,'p'); ps.forEach(pp=>{ setFlag(pp,'keepLines'); setFlag(pp,'keepNext'); });
+      if(n.localName==='tbl') wEls(n,'tr').forEach(tr=>{ let trPr=[...tr.children].find(c=>c.localName==='trPr'); if(!trPr){ trPr=wEl('trPr'); tr.insertBefore(trPr,tr.firstChild); } trPr.appendChild(wEl('cantSplit')); }); });
+    nodes.forEach(put);
+  };
+  const answers=[]; let firstQ=true;
   for(const g of byEx){
     const Q=await getQbank(g.ex.id); if(!Q) continue;
-    put(para(`■ ${g.ex.name}`,{bold:true,size:24}));
     const used=new Set();
     for(const n of g.nums){
-      for(const i of qIndexes(Q,n)){ if(used.has(i)) continue; used.add(i); await putEl(Q,i); }
-      const it=g.ex.items[n-1]; answers.push(`${g.ex.name} ${n}번 ${+it.answer?circled(+it.answer):'-'}`);
+      const no=newNo.get(g.ex.id+'|'+n), src=`${g.ex.name} ${n}번`, nodes=[];
+      for(const i of qIndexes(Q,n)){ if(used.has(i)) continue; used.add(i);
+        const node=await imp(Q,i);
+        const grp=Q.grp.find(x=>x.h===i); if(grp) replaceLead(node,GRP_RE,rangeOf(g,grp,false));
+        if(i===Q.q[n][0]){ replaceLead(node,NO_RE,`${no}.`); addSrc(node,src); }
+        nodes.push(node); }
+      while(nodes.length&&isEmptyP(nodes[0])) nodes.shift(); while(nodes.length&&isEmptyP(nodes[nodes.length-1])) nodes.pop();   // 앞뒤 빈 줄 정리
+      if(!firstQ){ blank(); blank(); blank(); } firstQ=false;   // 문항 사이 3줄
+      putChunk(nodes);
+      const it=g.ex.items[n-1]; answers.push({no, ans:+it.answer?circled(+it.answer):'-'});
     }
   }
-  put(para('정답',{bold:true,size:28,pageBreak:true}));
-  answers.forEach(a=>put(para(a)));
-  // 해설 (해석·어휘·해설) — 시험지 워드에 해설이 들어 있는 문항만
+  // 정답: 쪽을 넘기지 않고 작은 표로 (번호·정답 5쌍씩)
+  blank(); put(para('정답',{bold:true,size:24}));
+  const PER=5; let rows='';
+  for(let i=0;i<answers.length;i+=PER){
+    rows+='<w:tr><w:trPr><w:cantSplit/></w:trPr>'+Array.from({length:PER},(_,j)=>{ const a=answers[i+j];
+      const cell=(txt,shade)=>`<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>${shade?'<w:shd w:val="clear" w:color="auto" w:fill="F1F3F5"/>':''}</w:tcPr><w:p><w:pPr><w:spacing w:before="20" w:after="20" w:line="240" w:lineRule="auto"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr>${shade?'<w:b/>':''}<w:sz w:val="18"/><w:szCs w:val="18"/></w:rPr><w:t xml:space="preserve">${esc(txt)}</w:t></w:r></w:p></w:tc>`;
+      return a?cell(String(a.no),true)+cell(a.ans,false):cell('',true)+cell('',false); }).join('')+'</w:tr>';
+  }
+  const bd='<w:top w:val="single" w:sz="4" w:color="BFBFBF"/><w:left w:val="single" w:sz="4" w:color="BFBFBF"/><w:bottom w:val="single" w:sz="4" w:color="BFBFBF"/><w:right w:val="single" w:sz="4" w:color="BFBFBF"/><w:insideH w:val="single" w:sz="4" w:color="BFBFBF"/><w:insideV w:val="single" w:sz="4" w:color="BFBFBF"/>';
+  if(answers.length) put(doc.importNode(new DOMParser().parseFromString(`<w:tbl xmlns:w="${W_NS}"><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${bd}</w:tblBorders><w:tblLayout w:type="autofit"/></w:tblPr><w:tblGrid>${'<w:gridCol w:w="400"/>'.repeat(PER*2)}</w:tblGrid>${rows}</w:tbl>`,'application/xml').documentElement,true));
+  // 해설 (해석·어휘·해설) — 쪽 넘김 없이 이어서, 번호도 새 번호로
   if(withHae){
     let first=true;
     for(const g of byEx){
       const Q=await getQbank(g.ex.id); if(!Q||!Q.hq) continue;
       const nums=g.nums.filter(n=>Q.hq[n]); if(!nums.length) continue;
-      if(first){ put(para('해설',{bold:true,size:28,pageBreak:true})); first=false; }
-      put(para(`■ ${g.ex.name}`,{bold:true,size:24}));
+      if(first){ blank(); put(para('해설',{bold:true,size:24})); first=false; }
       const used=new Set();
-      for(const n of nums) for(const i of hIndexes(Q,n)){ if(used.has(i)) continue; used.add(i); await putEl(Q,i); }
+      for(const n of nums){
+        const no=newNo.get(g.ex.id+'|'+n); let added=false;
+        for(const i of hIndexes(Q,n)){ if(used.has(i)) continue; used.add(i);
+          const node=await imp(Q,i);
+          const grp=Q.hgrp.find(x=>x.h===i); if(grp) replaceLead(node,GRP_RE,rangeOf(g,grp,true));
+          if(i===Q.hq[n][0]){ replaceLead(node,NO_RE,`${no}.`); addSrc(node,`${g.ex.name} ${n}번`); }
+          if(!added){ blank(); added=true; }
+          put(node); }
+      }
     }
   }
   // 이미지 확장자 등록
