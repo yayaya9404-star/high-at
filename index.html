@@ -1129,6 +1129,7 @@ async function renderResultTab(){
     <div class="row" style="margin-bottom:14px">
       ${examPicker('resP',ex.id)}
       <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
+      <label class="f">반 (반별 분석)<select id="resClsTop"><option value="">반 선택</option>${clsList.map(c=>`<option ${resSub==='cls'&&c===resCls?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
       <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
       <label class="f">지난 시험과 비교<select id="resCmp"><option value="">비교 안 함</option>${cmpCandidates(ex).map(e=>`<option value="${e.id}" ${cmpEx&&e.id===cmpEx.id?'selected':''}>${roundLabel(roundKey(e))} · ${esc(e.name)}</option>`).join('')}</select></label>
       <button class="btn" id="csvBtn" style="align-self:flex-end">엑셀 다운로드</button>
@@ -1146,7 +1147,7 @@ async function renderResultTab(){
         <div class="bar"><i style="width:${cur}%;background:${CAT_COLORS[c]||'#94a3b8'}"></i></div>
         ${prev==null?'':`<div class="bar" style="margin-top:3px;height:5px"><i style="width:${prev}%;background:#cbd5e1"></i></div>`}</div>`; }).join('')}</div>
       <p class="muted" style="margin:-8px 0 12px">유형별 정답률: 진한 막대 = 이번 시험, 회색 막대 = ${esc(cmpEx.name)}</p>`:''}
-    <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button><button data-sub="cls" class="${resSub==='cls'?'active':''}">반별 분석</button></div>
+    <div class="subtabs"><button data-sub="students" class="${resSub==='students'?'active':''}">학생 성적</button><button data-sub="items" class="${resSub==='items'?'active':''}">문항 분석</button><button data-sub="cls" class="${resSub==='cls'?'active':''}">반별 분석 · 해설할 문항</button></div>
     <div style="overflow:auto">
     ${resSub==='cls' ? clsHtml : resSub==='students' ? `
       <table><thead><tr><th>순위</th><th>분원</th><th>반</th><th>이름</th><th>총점</th>${cmpEx?'<th>지난 시험</th><th>변화</th>':''}${cats.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
@@ -1182,6 +1183,7 @@ async function renderResultTab(){
         td.innerHTML=Q&&Q.q[no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,no),0,+it.answer||0)}</div>`:'<span class="muted">이 시험은 시험지 워드가 등록되지 않았어요. 시험 관리에서 워드를 올리면 문제가 보여요.</span>';
       }catch(err){ td.innerHTML=`<span class="muted">문제를 불러오지 못했어요: ${esc(err.message)}</span>`; } }
   });
+  $('#resClsTop').onchange=e=>{ if(!e.target.value) return; resCls=e.target.value; resSub='cls'; renderResultTab(); };
   const cs=$('#clsSel'); if(cs) cs.onchange=e=>{ resCls=e.target.value; renderResultTab(); };
   const ct=$('#clsTh'); if(ct) ct.onchange=e=>{ resClsTh=+e.target.value; renderResultTab(); };
   const ch=$('#clsHideL'); if(ch) ch.onchange=e=>{ LS.set('mx_hideListen',e.target.checked); renderResultTab(); };
@@ -1273,7 +1275,8 @@ let histCode=null, histQ='';
 async function renderHistTab(){
   const br=prefs.branch, list=await getStudents(br);   // 가장 최신 회차 명단의 학생만 (퇴원생 제외)
   const q=histQ.trim();
-  const found=list.filter(s=>s.member_code && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q)));
+  const withCode=list.filter(s=>s.member_code);
+  const match=(s,q)=>!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q);
   const noCode=list.length && !list.some(s=>s.member_code);
   $('#tab-hist').innerHTML=`
   <div class="grid2">
@@ -1281,17 +1284,21 @@ async function renderHistTab(){
       <label class="f">분원<select id="hBranch">${BRANCHES.map(b=>`<option ${b===br?'selected':''}>${b}</option>`).join('')}</select></label>
       <input id="hQ" placeholder="이름·회원코드·반 검색 (코드 입력 후 Enter)" value="${esc(histQ)}" style="width:100%;margin:10px 0">
       <div style="max-height:620px;overflow:auto">
-        ${found.map(s=>`<div class="exam-item ${s.member_code===histCode?'sel':''}" data-code="${esc(s.member_code)}"><b>${esc(s.student_name)}</b>
-          <span class="muted">${esc(s.class_name)} · ${esc(s.member_code)}${s.student_no?' · '+esc(s.student_no):''}</span></div>`).join('')
-          || `<p class="muted">${noCode?'이 분원 명단에 회원코드가 없어요. 회원코드 열이 있는 명단을 올려주세요.':list.length?'검색 결과가 없어요.':'학생 명단을 먼저 올려주세요.'}</p>`}
+        ${withCode.map(s=>`<div class="exam-item ${s.member_code===histCode?'sel':''}" data-code="${esc(s.member_code)}" ${match(s,q)?'':'hidden'}><b>${esc(s.student_name)}</b>
+          <span class="muted">${esc(s.class_name)} · ${esc(s.member_code)}${s.student_no?' · '+esc(s.student_no):''}</span></div>`).join('')}
+        <p class="muted" id="hEmpty" ${withCode.some(s=>match(s,q))?'hidden':''}>${noCode?'이 분원 명단에 회원코드가 없어요. 회원코드 열이 있는 명단을 올려주세요.':list.length?'검색 결과가 없어요.':'학생 명단을 먼저 올려주세요.'}</p>
       </div>
     </div>
     <div class="card" id="hBody">${histCode?'<p class="muted">불러오는 중…</p>':'<p class="muted">왼쪽에서 학생을 고르세요.</p>'}</div>
   </div>`;
   $('#hBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderHistTab(); };
   const hq=$('#hQ');
-  hq.oninput=()=>{ histQ=hq.value; renderHistTab().then(()=>{ const n=$('#hQ'); n.focus(); n.setSelectionRange(n.value.length,n.value.length); }); };
-  hq.onkeydown=e=>{ if(e.key==='Enter' && hq.value.trim()){ const v=hq.value.trim(); const one=found.length===1?found[0].member_code:v; histCode=one; renderHistTab(); } };
+  // 입력 중에는 화면을 다시 그리지 않고 목록만 숨김/표시 (한글 입력이 ㄱㅣㅁ처럼 풀리지 않도록)
+  const applyFilter=()=>{ const q=histQ.trim(); let n=0;
+    document.querySelectorAll('#tab-hist [data-code]').forEach(el=>{ const st=withCode.find(s=>s.member_code===el.dataset.code); const ok=!!st&&match(st,q); el.hidden=!ok; if(ok) n++; });
+    $('#hEmpty').hidden=n>0; };
+  hq.oninput=()=>{ histQ=hq.value; applyFilter(); };
+  hq.onkeydown=e=>{ if(e.key==='Enter' && !e.isComposing && hq.value.trim()){ const v=hq.value.trim(); const found=withCode.filter(s=>match(s,v)); histCode=found.length===1?found[0].member_code:v; renderHistTab(); } };
   document.querySelectorAll('#tab-hist [data-code]').forEach(el=>el.onclick=()=>{ histCode=el.dataset.code; renderHistTab(); });
   if(histCode) renderHistBody(histCode, list);
 }
