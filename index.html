@@ -75,6 +75,7 @@ tr.click{cursor:pointer} tr.click:hover td{background:#f8faff}
 .subtabs button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:5px 14px;font:inherit;cursor:pointer}
 .subtabs button.active{background:var(--text);color:#fff;border-color:var(--text)}
 .dist{display:flex;gap:4px}
+.pick-badge{display:inline-block;background:#fee2e2;color:#b91c1c;font-weight:700;font-size:13px;border-radius:5px;padding:0 6px;line-height:1.6}
 .dist span{min-width:38px;text-align:center;font-size:12px;padding:2px 0;border-radius:4px;background:#f3f4f6}
 .dist span.c{background:var(--ok-bg);color:var(--ok);font-weight:700}
 .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 12px;z-index:50}
@@ -1117,10 +1118,10 @@ async function renderResultTab(){
         return `<tr class="click" data-resq="${it.no}" title="눌러서 문제 보기"><td><span class="qno x">${it.no}</span> <span class="muted">▾</span></td><td>${pill(it.cat)} <span class="muted">${esc(it.sub||'')}</span></td>
           <td><b class="mark-x">${w}%</b> <span class="muted">(${wrongRs.length}/${cRs.length})</span></td><td>${wr[i]==null?'-':wr[i]+'%'}</td>
           <td>${noDist?'<span class="muted">-</span>':top?`${circled(top)} <span class="muted">${cnt[top]}명</span> · 정답 ${circled(+it.answer)}`:`<span class="muted">무응답</span>`}</td>
-          <td class="muted">${wrongRs.map(r=>esc(r.student_name)+(noDist?'':`(${(+r.answers[i])?circled(+r.answers[i]):'-'})`)).join(', ')}</td></tr>
+          <td style="line-height:1.9">${wrongRs.map(r=>`<span style="white-space:nowrap">${esc(r.student_name)}${noDist?'':` <b class="pick-badge">${(+r.answers[i])?(+r.answers[i])+'번':'무응답'}</b>`}</span>`).join(', ')}</td></tr>
           <tr class="qpv-row" data-pvfor="${it.no}" hidden><td colspan="6"></td></tr>`; }).join('')}
       </tbody></table>
-      <p class="muted">문항을 누르면 아래에 시험지 문제가 펼쳐져요. 틀린 학생 옆 괄호는 그 학생이 고른 답이에요.</p>
+      <p class="muted">문항을 누르면 아래에 시험지 문제가 펼쳐져요. 틀린 학생 이름 옆 빨간 칸은 그 학생이 고른 번호예요.</p>
       <div class="row" style="margin-top:8px;gap:10px"><button class="btn primary" id="clsWs">이 문항들로 해설용 문제지 만들기 (워드)</button><label class="ws-item" style="cursor:pointer"><input type="checkbox" id="clsHae" checked> 맨 뒤에 해설 붙이기</label></div>`
     : `<p class="muted">${cRs.length?`오답률 ${resClsTh}% 이상인 문항이 없어요. 기준을 낮춰 보세요.`:'이 반 응답이 없어요.'}</p>`}`;
 
