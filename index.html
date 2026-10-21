@@ -21,7 +21,18 @@ header{background:#fff;border-bottom:1px solid var(--line);padding:14px 24px;dis
 header h1{font-size:18px;margin:0}
 .mode{font-size:12px;padding:3px 10px;border-radius:99px;background:#f1f5f9;color:var(--sub)}
 .mode.on{background:var(--ok-bg);color:var(--ok)}
-nav{display:flex;gap:4px;margin-left:auto}
+nav{display:flex;gap:10px;margin-left:auto;flex-wrap:wrap}
+.navgrp{position:relative}
+.grp-btn{border:1px solid var(--line)!important;background:#fff!important;padding:9px 16px!important;border-radius:10px!important;color:var(--text)!important;font-weight:700!important}
+.navgrp.on .grp-btn{background:var(--main-soft)!important;border-color:#c7d7fe!important;color:var(--main)!important}
+.grp-cur{font-weight:600;margin:0 4px 0 6px}
+.grp-cur:not(:empty)::before{content:'· '}
+.grp-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(15,23,42,.12);padding:6px;min-width:240px;z-index:50}
+.navgrp.open .grp-menu{display:block}
+.grp-menu button{display:block;width:100%;text-align:left;padding:10px 12px!important;color:var(--text)!important}
+.grp-menu button small{display:block;font-weight:400;font-size:12px;color:var(--sub);margin-top:2px}
+.grp-menu button:hover{background:#f5f8ff}
+.grp-menu button.active{background:var(--main-soft);color:var(--main)!important}
 nav button{border:0;background:none;padding:8px 14px;border-radius:8px;font:inherit;font-weight:600;color:var(--sub);cursor:pointer}
 nav button.active{background:var(--main-soft);color:var(--main)}
 main{padding:20px 24px;max-width:1500px;margin:0 auto}
@@ -129,21 +140,31 @@ table.adm .gc-p{background:#eef4ff;color:#1d4ed8}
   <h1>모의고사 채점</h1>
   <span id="mode" class="mode"></span>
   <nav>
-    <button data-tab="exam" class="active">시험 관리</button>
-    <button data-tab="roster">학생 명단</button>
-    <button data-tab="omr">OMR 입력</button>
-    <button data-tab="result">결과·분석</button>
-    <button data-tab="hist">학생 기록</button>
-    <button data-tab="admin">관리자 분석</button>
+    <div class="navgrp out" data-grp="out">
+      <button class="grp-btn" data-grpbtn="out">분석 리포트<b class="grp-cur"></b> ▾</button>
+      <div class="grp-menu">
+        <button data-tab="admin" class="active">관리자 분석<small>등급·오답률·담임별 성과</small></button>
+        <button data-tab="result">결과·분석<small>시험별 성적·문항·반별 분석</small></button>
+        <button data-tab="hist">학생 기록<small>학생별 누적 기록·오답 문제지</small></button>
+      </div>
+    </div>
+    <div class="navgrp in" data-grp="in">
+      <button class="grp-btn" data-grpbtn="in">데이터 입력<b class="grp-cur"></b> ▾</button>
+      <div class="grp-menu">
+        <button data-tab="exam">시험 관리<small>시험 등록·정답·시험지 워드</small></button>
+        <button data-tab="roster">학생 명단<small>회차별 명단 올리기</small></button>
+        <button data-tab="omr">OMR 입력<small>학생 답안 입력·엑셀 입력</small></button>
+      </div>
+    </div>
   </nav>
 </header>
 <main>
-  <section id="tab-exam"></section>
+  <section id="tab-exam" hidden></section>
   <section id="tab-roster" hidden></section>
   <section id="tab-omr" hidden></section>
   <section id="tab-result" hidden></section>
   <section id="tab-hist" hidden></section>
-  <section id="tab-admin" hidden></section>
+  <section id="tab-admin"></section>
 </main>
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 
@@ -363,9 +384,15 @@ function examOptions(sel){
 }
 
 /* ===================== 탭 ===================== */
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+// 상단: 분석 리포트 / 데이터 입력 → 눌러서 들어갈 화면 고르기
+document.querySelectorAll('nav [data-tab]').forEach(b=>b.onclick=()=>{ document.querySelectorAll('.navgrp').forEach(g=>g.classList.remove('open')); showTab(b.dataset.tab); });
+document.querySelectorAll('[data-grpbtn]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const g=b.parentElement, was=g.classList.contains('open');
+  document.querySelectorAll('.navgrp').forEach(x=>x.classList.remove('open')); if(!was) g.classList.add('open'); });
+document.addEventListener('click',e=>{ if(!e.target.closest('.navgrp')) document.querySelectorAll('.navgrp').forEach(g=>g.classList.remove('open')); });
 function showTab(t){
-  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  document.querySelectorAll('nav [data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  document.querySelectorAll('.navgrp').forEach(g=>{ const a=g.querySelector('[data-tab].active'); g.classList.toggle('on',!!a);
+    g.querySelector('.grp-cur').textContent=a?a.childNodes[0].textContent:''; });
   ['exam','roster','omr','result','hist','admin'].forEach(x=>$('#tab-'+x).hidden = x!==t);
   if(t==='exam') renderExamTab();
   if(t==='roster') renderRosterTab();
@@ -1938,7 +1965,7 @@ async function openAnswerImport(ex){
 (async()=>{
   const m=$('#mode');
   if(sb){ m.textContent='Supabase 연결됨'; m.classList.add('on'); } else { m.textContent='로컬 테스트 모드 (이 브라우저에만 저장)'; }
-  await loadExams(); renderExamTab();
+  await loadExams(); showTab('admin');   // 열면 관리자 분석부터
 })();
 </script>
 </body>
