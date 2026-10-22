@@ -1086,7 +1086,6 @@ async function saveOmr(ex, onSaved){
 }
 
 /* ===================== 3. 결과·분석 ===================== */
-let resMine=true;   // 담임 계정: 결과·분석에서 내 담당 학생만
 let resSub='students', resBranch='전체', resCmp={}, resCls='', resClsTh=40;   // resCmp[시험id] = 비교할 시험 id ('' = 비교 안 함)
 const examDateKey = e => (e.exam_date||String(e.created_at||'').slice(0,10)||'');
 function cmpCandidates(ex){ const g=normGrade(ex.grade); return EXAMS.filter(e=>e.id!==ex.id && (!g || normGrade(e.grade)===g)).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
@@ -1124,13 +1123,14 @@ const catsOf = ex => [...new Set(ex.items.map(i=>i.cat||'미지정'))].sort((a,b
 
 async function renderResultTab(){
   if(!EXAMS.length){ $('#tab-result').innerHTML='<div class="card"><p class="muted">먼저 시험을 등록하세요.</p></div>'; return; }
-  if(!resExamId || !examById(resExamId)) resExamId=EXAMS[0].id;
+  if(!resExamId || !examById(resExamId)){   // 처음 열면 가장 최신 회차 시험부터 (같은 회차면 고1부터) — 회차·학년은 드롭다운으로 바꾸기
+    const latest=[...EXAMS].sort((x,y)=>koCmp(roundKey(y),roundKey(x)) || koCmp(gradeKey(x),gradeKey(y)) || koCmp(examDateKey(y),examDateKey(x)))[0];
+    resExamId=latest.id; }
   const ex=examById(resExamId);
   const all=await getResponses(ex.id,true);
   // 담임 계정: 기본은 내 담당 학생만 (담임 = 입력 때 기록된 담임, 없으면 그 회차 명단의 담임)
-  const mineT=myTeacher(); if(mineT) await loadStudents(ME.branch);
-  const isMine=(r,e)=>teacherOf(r,rosterSync(r.branch,roundKey(e)))===mineT;
-  const rs = (resBranch==='전체' ? all : all.filter(r=>r.branch===resBranch)).filter(r=>!mineT||!resMine||isMine(r,ex));
+  const mineT=myTeacher();   // 담임 계정은 서버에서 내 담당 학생 답안만 내려줌
+  const rs = resBranch==='전체' ? all : all.filter(r=>r.branch===resBranch);
   const scores=rs.map(r=>r.score);
   const avg = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : '-';
   const cats=catsOf(ex);
@@ -1141,7 +1141,7 @@ async function renderResultTab(){
   if(!(ex.id in resCmp)) resCmp[ex.id]=defaultCmp(ex);
   const cmpEx=resCmp[ex.id]?examById(resCmp[ex.id]):null;
   const cmpAll=cmpEx?await getResponses(cmpEx.id):[];
-  const cmpRs=(resBranch==='전체'?cmpAll:cmpAll.filter(r=>r.branch===resBranch)).filter(r=>!mineT||!resMine||isMine(r,cmpEx));
+  const cmpRs=resBranch==='전체'?cmpAll:cmpAll.filter(r=>r.branch===resBranch);
   const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
   const prevOf=r=>cmpRs.find(p=>sameResp(p,r));
   const cmpAvg=cmpRs.length?cmpRs.reduce((a,r)=>a+r.score,0)/cmpRs.length:null;
@@ -1184,7 +1184,7 @@ async function renderResultTab(){
     <div class="row" style="margin-bottom:14px">
       ${examPicker('resP',ex.id)}
       <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
-      ${mineT?`<label class="ws-item" style="cursor:pointer;align-self:flex-end;padding-bottom:8px"><input type="checkbox" id="resMine" ${resMine?'checked':''}> 내 담당 학생만 <span class="muted">(${esc(mineT)})</span></label>`:''}
+      ${mineT?`<span class="muted" style="align-self:flex-end;padding-bottom:8px">담임 계정 · <b>${esc(mineT)}</b> 선생님 담당 학생만 보여요</span>`:''}
       <label class="f">반 (반별 분석)<select id="resClsTop"><option value="">반 선택</option>${clsList.map(c=>`<option ${resSub==='cls'&&c===resCls?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
       <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
       <label class="f">지난 시험과 비교<select id="resCmp"><option value="">비교 안 함</option>${cmpCandidates(ex).map(e=>`<option value="${e.id}" ${cmpEx&&e.id===cmpEx.id?'selected':''}>${roundLabel(roundKey(e))} · ${esc(e.name)}</option>`).join('')}</select></label>
@@ -1239,7 +1239,6 @@ async function renderResultTab(){
         td.innerHTML=Q&&Q.q[no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,no),0,+it.answer||0)}</div>`:'<span class="muted">이 시험은 시험지 워드가 등록되지 않았어요. 시험 관리에서 워드를 올리면 문제가 보여요.</span>';
       }catch(err){ td.innerHTML=`<span class="muted">문제를 불러오지 못했어요: ${esc(err.message)}</span>`; } }
   });
-  const rm=$('#resMine'); if(rm) rm.onchange=e=>{ resMine=e.target.checked; renderResultTab(); };
   $('#resClsTop').onchange=e=>{ if(!e.target.value) return; resCls=e.target.value; resSub='cls'; renderResultTab(); };
   const cs=$('#clsSel'); if(cs) cs.onchange=e=>{ resCls=e.target.value; renderResultTab(); };
   const ct=$('#clsTh'); if(ct) ct.onchange=e=>{ resClsTh=+e.target.value; renderResultTab(); };
@@ -1329,7 +1328,7 @@ function exportCsv(ex, rows, cats){
 
 /* ===================== 4. 학생 기록 (회원코드 기준 누적) ===================== */
 let histCode=null, histQ='';
-let histActiveOnly=true, histMine=true;   // 담임 계정: 기본은 내 담당 학생만   // 학생 기록: 기본은 재원생만 (체크 풀면 퇴원생도)
+let histActiveOnly=true;   // 학생 기록: 기본은 재원생만 (체크 풀면 퇴원생도)
 async function renderHistTab(){
   const br=prefs.branch; await loadStudents(br);
   // 재원생 = 가장 최신 회차 명단에 있는 학생. 퇴원생 = 예전 회차 명단에만 있는 학생 (마지막으로 있던 명단 기준)
@@ -1341,7 +1340,7 @@ async function renderHistTab(){
   const q=histQ.trim();
   const withCode=list.filter(s=>s.member_code);
   const mineT=myTeacher();
-  const match=(s,q)=>(!histActiveOnly || !s._out) && (!mineT || !histMine || s.teacher===mineT) && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q));
+  const match=(s,q)=>(!histActiveOnly || !s._out) && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q));
   const noCode=list.length && !list.some(s=>s.member_code);
   const nOut=withCode.filter(s=>s._out).length;
   $('#tab-hist').innerHTML=`
@@ -1351,7 +1350,7 @@ async function renderHistTab(){
       <button class="btn" id="hCommon" style="width:100%;margin-top:10px">학년 공통 대비 · 회차 인쇄 (듣기 제외)</button>
       <input id="hQ" placeholder="이름·회원코드·반 검색 (코드 입력 후 Enter)" value="${esc(histQ)}" style="width:100%;margin:10px 0 6px">
       <label class="ws-item" style="cursor:pointer;margin-bottom:8px"><input type="checkbox" id="hActive" ${histActiveOnly?'checked':''}> 재원생만 보기 <span class="muted">(풀면 퇴원생 ${nOut}명도 검색)</span></label>
-      ${mineT?`<label class="ws-item" style="cursor:pointer;margin-bottom:8px"><input type="checkbox" id="hMine" ${histMine?'checked':''}> 내 담당 학생만 <span class="muted">(${esc(mineT)})</span></label>`:''}
+      ${mineT?`<p class="muted" style="margin:0 0 8px">담임 계정 · <b>${esc(mineT)}</b> 선생님 담당 학생만 보여요</p>`:''}
       <div style="max-height:620px;overflow:auto">
         ${withCode.map(s=>`<div class="exam-item ${s.member_code===histCode?'sel':''}" data-code="${esc(s.member_code)}" ${match(s,q)?'':'hidden'}><b>${esc(s.student_name)}${s._out?' <span class="pill" style="background:#9ca3af">퇴원</span>':''}</b>
           <span class="muted">${esc(s.class_name)} · ${esc(s.member_code)}${s.student_no?' · '+esc(s.student_no):''}${s._out?' · 마지막 명단 '+esc(roundLabel(s.exam_round)):''}</span></div>`).join('')}
@@ -1368,7 +1367,6 @@ async function renderHistTab(){
     document.querySelectorAll('#tab-hist [data-code]').forEach(el=>{ const st=withCode.find(s=>s.member_code===el.dataset.code); const ok=!!st&&match(st,q); el.hidden=!ok; if(ok) n++; });
     $('#hEmpty').hidden=n>0; };
   $('#hActive').onchange=e=>{ histActiveOnly=e.target.checked; applyFilter(); };
-  const hm=$('#hMine'); if(hm) hm.onchange=e=>{ histMine=e.target.checked; applyFilter(); };
   hq.oninput=()=>{ histQ=hq.value; applyFilter(); };
   hq.onkeydown=e=>{ if(e.key==='Enter' && !e.isComposing && hq.value.trim()){ const v=hq.value.trim(); const found=withCode.filter(s=>match(s,v)); histCode=found.length===1?found[0].member_code:v; renderHistTab(); } };
   document.querySelectorAll('#tab-hist [data-code]').forEach(el=>el.onclick=()=>{ histCode=el.dataset.code; renderHistTab(); });
@@ -1607,7 +1605,7 @@ async function renderAdminTab(){
   const diffTag=d=>`<b class="${d>0?'mark-o':d<0?'mark-x':''}">${d>0?'▲':d<0?'▼':''}${Math.abs(d).toFixed(1)}</b>`;
 
   // ① 분원별 등급 분석 (행: 학년)
-  const t1=ADM_GRADES.map(g=>{ const {ex,all}=data[g]; const l=ex?all.filter(r=>r.branch===admBranch):[]; return {g,cnt:ex?gradeCounts(l,ex):[0,0,0,0,0],n:l.length}; });
+  const t1=ADM_GRADES.map(g=>{ const {ex,sum}=data[g]; const l=ex?sum.filter(r=>r.branch===admBranch):[]; return {g,cnt:ex?gradeCounts(l,ex):[0,0,0,0,0],n:l.length}; });
   const t1sum=t1.reduce((a,x)=>({cnt:a.cnt.map((v,i)=>v+x.cnt[i]),n:a.n+x.n}),{cnt:[0,0,0,0,0],n:0});
 
   // ② 전체 분원 등급 분석 (행: 분원, 선택 학년)
@@ -1991,7 +1989,7 @@ async function openCommonWorksheet({name='', grade=''}={}){
     for(const ex of exs){
       if(st.recentN && !roundsDesc.slice(0,st.recentN).includes(roundKey(ex))) continue;
       const Q=await getQbank(ex.id); if(!Q) continue;
-      const rs=(await getResponses(ex.id)).filter(r=>st.scope==='all'||r.branch===prefs.branch); if(!rs.length) continue;
+      const rs=(await getExamSummary(ex.id)).filter(r=>st.scope==='all'||r.branch===prefs.branch); if(!rs.length) continue;
       const wr=wrongRates(ex,rs);
       ex.items.forEach((it,i)=>{ if(!Q.q[it.no]) return; if(!st.listen && it.cat==='듣기') return;
         if(wr[i]!=null && wr[i]>=st.th) items.push({ex,it,rate:wr[i],n:rs.length}); });
