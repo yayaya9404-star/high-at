@@ -2071,18 +2071,23 @@ async function readAnswerSheet(file, ex){
   if(hi<0) throw new Error('1, 2, 3 … 처럼 문항 번호가 적힌 머리글 줄을 찾지 못했어요.');
   const head=aoa[hi].map(c=>String(c).trim());
   const qcol={}; head.forEach((h,i)=>{ const m=h.match(/^(\d{1,2})\s*(번)?$/); if(m && +m[1]>=1 && +m[1]<=ex.q_count && !(+m[1] in qcol)) qcol[+m[1]]=i; });
-  let ncol=head.findIndex(h=>/이름|성명/.test(h)); if(ncol<0) ncol=head.findIndex((h,i)=>!Object.values(qcol).includes(i));
-  const ccol=head.findIndex(h=>/회원\s*코드|코드/.test(h));
+  let ncol=head.findIndex(h=>/이름|성명|학생명/.test(h)); if(ncol<0) ncol=head.findIndex((h,i)=>!Object.values(qcol).includes(i));
+  const ccol=head.findIndex(h=>/회원\s*코드|코드|^ID$/i.test(h));
+  // 본사 양식 (시험정보·응시학년·분원·선생님·ID·학생명·현재반…) 열도 있으면 같이 읽음
+  const col=re=>head.findIndex(h=>re.test(h));
+  const gcol=col(/응시\s*학년/), bcol=col(/^분원$/), tcol=col(/^(선생님|담임)$/), kcol=col(/^(현재\s*반|반)$/);
+  const cell=(r,i)=>i>=0?String(r[i]??'').trim():'';
   const toCh=v=>{ const s=String(v??'').trim().replace(/[①②③④⑤]/,c=>'①②③④⑤'.indexOf(c)+1); return /^[1-5]$/.test(s)?s:'0'; };
   return aoa.slice(hi+1).map(r=>({
     name:String(r[ncol]??'').trim(), code:ccol>=0?String(r[ccol]??'').trim():'',
+    grade:cell(r,gcol), branch:cell(r,bcol), teacher:cell(r,tcol), cls:cell(r,kcol),
     answers:Array.from({length:ex.q_count},(_,i)=>qcol[i+1]!=null?toCh(r[qcol[i+1]]):'0').join('')
   })).filter(x=>x.name);
 }
 
 async function openAnswerImport(ex){
   $('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2 style="margin:0">답안 엑셀로 한 번에 입력 · ${esc(ex.name)}</h2><button class="btn" id="closeM">닫기</button></div>
-    <p class="muted">첫 줄에 이름과 1~45 번호, 아래로 학생별 고른 번호가 있는 엑셀. 분원: <b>${esc(prefs.branch)}</b> (OMR 입력 화면에서 고른 분원)</p>
+    <p class="muted">첫 줄에 이름과 1~45 번호, 아래로 학생별 고른 번호가 있는 엑셀. 본사 양식(시험정보·응시학년·분원·선생님·ID·학생명…)도 그대로 올리면 돼요 — 이 시험 학년·분원 학생만 골라 넣어요. 분원: <b>${esc(prefs.branch)}</b> (OMR 입력 화면에서 고른 분원)</p>
     <input type="file" id="xaFile" accept=".xlsx,.xls,.csv"><div id="xaBody"></div>`;
   $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
   $('#modalBg').classList.add('show');
@@ -2090,7 +2095,12 @@ async function openAnswerImport(ex){
     const f=e.target.files[0]; if(!f) return;
     try{
       if(!window.XLSX) throw new Error('엑셀 읽기 도구를 불러오지 못했어요.');
-      const rows=await readAnswerSheet(f,ex);
+      const rowsAll=await readAnswerSheet(f,ex);
+      // 본사 양식은 한 시트에 여러 학년·분원이 섞여 있음 → 이 시험 학년·현재 분원만
+      const egx=normGrade(ex.grade);
+      const offGrade=rowsAll.filter(x=>x.grade && egx && normGrade(x.grade)!==egx);
+      const offBranch=rowsAll.filter(x=>!offGrade.includes(x) && x.branch && x.branch!==prefs.branch);
+      const rows=rowsAll.filter(x=>!offGrade.includes(x) && !offBranch.includes(x));
       const keyMissing=ex.items.filter(it=>!+it.answer).map(it=>it.no);
       const roster=await getRoster(prefs.branch, roundKey(ex)), eg=normGrade(ex.grade);
       const existing=(await getResponses(ex.id,true)).filter(r=>r.branch===prefs.branch);
@@ -2100,35 +2110,40 @@ async function openAnswerImport(ex){
       const plan=rows.map(x=>{
         if(!/[1-5]/.test(x.answers)) return {...x, kind:'skip'};
         let cand=existing.filter(r=>!used.has(r.id) && (x.code ? r.member_code===x.code : r.student_name===x.name));
+        if(!cand.length && x.code) cand=existing.filter(r=>!used.has(r.id) && r.student_name===x.name);   // 코드가 달라도 이름으로 한 번 더
         let old=cand.sort((a,b)=>agree(x.answers,b)-agree(x.answers,a))[0]||null;
         if(old){ used.add(old.id); }
         let st=null;
-        if(!old){ let c=roster.filter(s=>x.code ? s.member_code===x.code : s.student_name===x.name); if(c.length>1) c=c.filter(s=>!s.grade||normGrade(s.grade)===eg); if(c.length===1) st=c[0]; }
+        if(!old){ let c=roster.filter(s=>x.code ? s.member_code===x.code : s.student_name===x.name);
+          if(!c.length && x.code) c=roster.filter(s=>s.student_name===x.name);   // 코드가 명단과 달라도 이름으로
+          if(c.length>1) c=c.filter(s=>!s.grade||normGrade(s.grade)===eg); if(c.length===1) st=c[0]; }
         const score=gradeAnswers(ex,x.answers).score;
         return {...x, old, st, score, kind: old?'replace':st?'new':'nomatch'};
       });
       const cnt=k=>plan.filter(p=>p.kind===k).length;
       const diff=plan.filter(p=>p.old && p.old.score!==p.score);
       $('#xaBody').innerHTML=`
+        ${offGrade.length||offBranch.length?`<p class="muted" style="margin-top:8px">제외: ${offGrade.length?`다른 학년 ${offGrade.length}명 (${[...new Set(offGrade.map(x=>x.grade))].map(esc).join(', ')})`:''}${offGrade.length&&offBranch.length?' · ':''}${offBranch.length?`다른 분원 ${offBranch.length}명 (${[...new Set(offBranch.map(x=>x.branch))].map(esc).join(', ')})`:''} — 그 학년 시험·분원을 골라서 같은 파일을 다시 올리면 돼요.</p>`:''}
+        ${!rows.length?`<p class="total bad">이 시험(${esc(egx)}) · ${esc(prefs.branch)}에 해당하는 학생이 파일에 없어요.</p>`:''}
         ${keyMissing.length?`<p class="total bad">정답이 비어 있는 문항: ${keyMissing.join(', ')}번 — 이 문항은 모두 오답 처리돼요. 시험 관리에서 정답을 먼저 넣는 걸 권해요.</p>`:''}
-        <p style="margin-top:10px">기존 답안 교체 <b>${cnt('replace')}</b> · 명단 연결 새로 입력 <b>${cnt('new')}</b> · 명단에 없음(회원코드 없이 입력) <b>${cnt('nomatch')}</b> · 빈 답안(결시) 제외 <b>${cnt('skip')}</b></p>
+        <p style="margin-top:10px">기존 답안 교체 <b>${cnt('replace')}</b> · 명단 연결 새로 입력 <b>${cnt('new')}</b> · 명단에 없음(파일의 이름·코드로 입력) <b>${cnt('nomatch')}</b> · 빈 답안(결시) 제외 <b>${cnt('skip')}</b></p>
         ${diff.length?`<p class="total bad">기존 점수와 달라지는 학생 ${diff.length}명 — OMR 카드와 엑셀을 한번 확인해 주세요.</p>`:''}
         <div style="max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px"><table><thead><tr><th>이름</th><th>처리</th><th>반</th><th>점수</th><th>기존 점수</th></tr></thead><tbody>
           ${plan.map(p=>`<tr><td>${esc(p.name)}</td><td>${{replace:'기존 교체',new:'새로 입력',nomatch:'<span class="mark-x">명단에 없음</span>',skip:'<span class="muted">결시 제외</span>'}[p.kind]}</td>
-            <td>${esc(p.old?p.old.class_name:p.st?p.st.class_name:'')}</td><td>${p.kind==='skip'?'':`<b>${p.score}</b>`}</td>
+            <td>${esc(p.old?p.old.class_name:p.st?p.st.class_name:(p.cls||''))}</td><td>${p.kind==='skip'?'':`<b>${p.score}</b>`}</td>
             <td>${p.old?(p.old.score!==p.score?`<b class="mark-x">${p.old.score}</b>`:p.old.score):''}</td></tr>`).join('')}
         </tbody></table></div>
         <div class="row" style="margin-top:12px"><button class="btn primary" id="xaGo">입력하기</button></div>`;
       $('#xaGo').onclick=async()=>{
-        const todo=plan.filter(p=>p.kind!=='skip');
+        const todo=plan.filter(p=>p.kind!=='skip'); if(!todo.length) return alert('입력할 학생이 없어요.');
         if(!confirm(`${todo.length}명의 답안을 저장할까요?${cnt('replace')?`\n(기존 ${cnt('replace')}명 답안은 엑셀 내용으로 바뀝니다)`:''}`)) return;
         $('#xaGo').disabled=true; $('#xaGo').textContent='저장 중…';
         try{
           for(const p of todo){
             const rec={id:p.old?p.old.id:uid(), exam_id:ex.id, branch:prefs.branch,
-              class_name:p.old?p.old.class_name:(p.st?p.st.class_name:''), student_name:p.old?p.old.student_name:(p.st?p.st.student_name:p.name),
+              class_name:p.old?p.old.class_name:(p.st?p.st.class_name:(p.cls||'')), student_name:p.old?p.old.student_name:(p.st?p.st.student_name:p.name),
               member_code:p.old?p.old.member_code:(p.st&&p.st.member_code||p.code||null),
-              teacher:(p.old&&p.old.teacher) || (p.st&&p.st.teacher) || ((p.old&&rosterOf(p.old,roster))||{}).teacher || '', answers:p.answers, score:p.score};
+              teacher:(p.old&&p.old.teacher) || p.teacher || (p.st&&p.st.teacher) || ((p.old&&rosterOf(p.old,roster))||{}).teacher || '', answers:p.answers, score:p.score};
             if(!sb) rec.created_at=(p.old&&p.old.created_at)||nowIso();
             await DB.saveResponse(rec);
           }
