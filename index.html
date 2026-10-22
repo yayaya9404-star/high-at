@@ -29,6 +29,7 @@ nav{display:flex;gap:10px;margin-left:auto;flex-wrap:wrap}
 .grp-cur:not(:empty)::before{content:'· '}
 .grp-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(15,23,42,.12);padding:6px;min-width:240px;z-index:50}
 .navgrp.open .grp-menu{display:block}
+[hidden]{display:none!important}
 .grp-menu button{display:block;width:100%;text-align:left;padding:10px 12px!important;color:var(--text)!important}
 .grp-menu button small{display:block;font-weight:400;font-size:12px;color:var(--sub);margin-top:2px}
 .grp-menu button:hover{background:#f5f8ff}
@@ -125,6 +126,13 @@ table.adm .gc-p{background:#eef4ff;color:#1d4ed8}
 .ws-prev{cursor:pointer;display:inline-flex;gap:6px;align-items:center} .ws-prev:hover b{color:var(--main);text-decoration:underline}
 .ws-pv{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:4px 0 8px 22px;background:#fcfcfd;max-height:420px;overflow:auto}
 .cat-bar.click{cursor:pointer} .cat-bar.click:hover{border-color:var(--main)}
+.login-bg{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:200;padding:16px}
+.login{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px;width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px}
+.login h2{margin:0 0 4px}
+.who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub)}
+.who b{color:var(--text)}
+.who button{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;color:var(--sub)}
+.role-tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:var(--main-soft);color:var(--main)}
 .hint{background:#f8fafc;border:1px dashed var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--sub);margin:10px 0}
 @media print{
   body *{visibility:hidden}
@@ -156,7 +164,9 @@ table.adm .gc-p{background:#eef4ff;color:#1d4ed8}
         <button data-tab="omr">OMR 입력<small>학생 답안 입력·엑셀 입력</small></button>
       </div>
     </div>
+    <button data-tab="acct" id="acctBtn" hidden>계정 관리</button>
   </nav>
+  <div class="who" id="who" hidden></div>
 </header>
 <main>
   <section id="tab-exam" hidden></section>
@@ -165,7 +175,18 @@ table.adm .gc-p{background:#eef4ff;color:#1d4ed8}
   <section id="tab-result" hidden></section>
   <section id="tab-hist" hidden></section>
   <section id="tab-admin"></section>
+  <section id="tab-acct" hidden></section>
 </main>
+<div class="login-bg" id="loginBg" hidden>
+  <form class="login" id="loginForm" autocomplete="on">
+    <h2>모의고사 채점</h2>
+    <p class="muted" style="margin:0">받은 아이디와 비밀번호로 로그인하세요.</p>
+    <label class="f">아이디<input id="lgId" autocomplete="username" autocapitalize="off" required></label>
+    <label class="f">비밀번호<input id="lgPw" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary" id="lgGo" type="submit">로그인</button>
+    <p class="total bad" id="lgErr" hidden></p>
+  </form>
+</div>
 <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
 
 <script>
@@ -174,6 +195,7 @@ const SUPABASE_URL = 'https://qprksmuivuknplzugfeg.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFwcmtzbXVpdnVrbnBsenVnZmVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5NzQwMzYsImV4cCI6MjEwNTU1MDAzNn0.lhFr6-1QsqOBbQV80FgM4ROKmP26gDj18s9G_8vvOcY';   // anon public key
 const FILE_BUCKET = 'exam-papers';
 const BRANCHES = ['남동탄','수원','장안','서수원','운정1','운정2'];
+const ALL_BRANCHES = [...BRANCHES];   // 전체 분원 비교용 (분원 계정은 BRANCHES가 자기 분원 하나로 줄어듦)
 
 const CATS = ['듣기','대의파악','세부정보','어법·어휘','빈칸추론','간접쓰기','장문독해'];
 const CAT_COLORS = {'듣기':'#64748b','대의파악':'#1fa45a','세부정보':'#0f6e8f','어법·어휘':'#d98a0b','빈칸추론':'#7e3fb3','간접쓰기':'#c4700c','장문독해':'#c0262d'};
@@ -393,13 +415,14 @@ function showTab(t){
   document.querySelectorAll('nav [data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
   document.querySelectorAll('.navgrp').forEach(g=>{ const a=g.querySelector('[data-tab].active'); g.classList.toggle('on',!!a);
     g.querySelector('.grp-cur').textContent=a?a.childNodes[0].textContent:''; });
-  ['exam','roster','omr','result','hist','admin'].forEach(x=>$('#tab-'+x).hidden = x!==t);
+  ['exam','roster','omr','result','hist','admin','acct'].forEach(x=>$('#tab-'+x).hidden = x!==t);
   if(t==='exam') renderExamTab();
   if(t==='roster') renderRosterTab();
   if(t==='omr') renderOmrTab();
   if(t==='result') renderResultTab();
   if(t==='hist') renderHistTab();
   if(t==='admin') renderAdminTab();
+  if(t==='acct') renderAcctTab();
 }
 
 /* ===================== 1. 시험 관리 ===================== */
@@ -1063,6 +1086,7 @@ async function saveOmr(ex, onSaved){
 }
 
 /* ===================== 3. 결과·분석 ===================== */
+let resMine=true;   // 담임 계정: 결과·분석에서 내 담당 학생만
 let resSub='students', resBranch='전체', resCmp={}, resCls='', resClsTh=40;   // resCmp[시험id] = 비교할 시험 id ('' = 비교 안 함)
 const examDateKey = e => (e.exam_date||String(e.created_at||'').slice(0,10)||'');
 function cmpCandidates(ex){ const g=normGrade(ex.grade); return EXAMS.filter(e=>e.id!==ex.id && (!g || normGrade(e.grade)===g)).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a))); }
@@ -1103,7 +1127,10 @@ async function renderResultTab(){
   if(!resExamId || !examById(resExamId)) resExamId=EXAMS[0].id;
   const ex=examById(resExamId);
   const all=await getResponses(ex.id,true);
-  const rs = resBranch==='전체' ? all : all.filter(r=>r.branch===resBranch);
+  // 담임 계정: 기본은 내 담당 학생만 (담임 = 입력 때 기록된 담임, 없으면 그 회차 명단의 담임)
+  const mineT=myTeacher(); if(mineT) await loadStudents(ME.branch);
+  const isMine=(r,e)=>teacherOf(r,rosterSync(r.branch,roundKey(e)))===mineT;
+  const rs = (resBranch==='전체' ? all : all.filter(r=>r.branch===resBranch)).filter(r=>!mineT||!resMine||isMine(r,ex));
   const scores=rs.map(r=>r.score);
   const avg = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : '-';
   const cats=catsOf(ex);
@@ -1114,7 +1141,7 @@ async function renderResultTab(){
   if(!(ex.id in resCmp)) resCmp[ex.id]=defaultCmp(ex);
   const cmpEx=resCmp[ex.id]?examById(resCmp[ex.id]):null;
   const cmpAll=cmpEx?await getResponses(cmpEx.id):[];
-  const cmpRs=resBranch==='전체'?cmpAll:cmpAll.filter(r=>r.branch===resBranch);
+  const cmpRs=(resBranch==='전체'?cmpAll:cmpAll.filter(r=>r.branch===resBranch)).filter(r=>!mineT||!resMine||isMine(r,cmpEx));
   const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
   const prevOf=r=>cmpRs.find(p=>sameResp(p,r));
   const cmpAvg=cmpRs.length?cmpRs.reduce((a,r)=>a+r.score,0)/cmpRs.length:null;
@@ -1157,6 +1184,7 @@ async function renderResultTab(){
     <div class="row" style="margin-bottom:14px">
       ${examPicker('resP',ex.id)}
       <label class="f">분원<select id="resBranch">${['전체',...BRANCHES].map(b=>`<option ${b===resBranch?'selected':''}>${b}</option>`).join('')}</select></label>
+      ${mineT?`<label class="ws-item" style="cursor:pointer;align-self:flex-end;padding-bottom:8px"><input type="checkbox" id="resMine" ${resMine?'checked':''}> 내 담당 학생만 <span class="muted">(${esc(mineT)})</span></label>`:''}
       <label class="f">반 (반별 분석)<select id="resClsTop"><option value="">반 선택</option>${clsList.map(c=>`<option ${resSub==='cls'&&c===resCls?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
       <label class="f">취약 기준 (분원 오답률 미만)<input id="resTh" type="number" min="0" max="100" value="${prefs.threshold}" style="width:90px"></label>
       <label class="f">지난 시험과 비교<select id="resCmp"><option value="">비교 안 함</option>${cmpCandidates(ex).map(e=>`<option value="${e.id}" ${cmpEx&&e.id===cmpEx.id?'selected':''}>${roundLabel(roundKey(e))} · ${esc(e.name)}</option>`).join('')}</select></label>
@@ -1211,6 +1239,7 @@ async function renderResultTab(){
         td.innerHTML=Q&&Q.q[no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,no),0,+it.answer||0)}</div>`:'<span class="muted">이 시험은 시험지 워드가 등록되지 않았어요. 시험 관리에서 워드를 올리면 문제가 보여요.</span>';
       }catch(err){ td.innerHTML=`<span class="muted">문제를 불러오지 못했어요: ${esc(err.message)}</span>`; } }
   });
+  const rm=$('#resMine'); if(rm) rm.onchange=e=>{ resMine=e.target.checked; renderResultTab(); };
   $('#resClsTop').onchange=e=>{ if(!e.target.value) return; resCls=e.target.value; resSub='cls'; renderResultTab(); };
   const cs=$('#clsSel'); if(cs) cs.onchange=e=>{ resCls=e.target.value; renderResultTab(); };
   const ct=$('#clsTh'); if(ct) ct.onchange=e=>{ resClsTh=+e.target.value; renderResultTab(); };
@@ -1300,7 +1329,7 @@ function exportCsv(ex, rows, cats){
 
 /* ===================== 4. 학생 기록 (회원코드 기준 누적) ===================== */
 let histCode=null, histQ='';
-let histActiveOnly=true;   // 학생 기록: 기본은 재원생만 (체크 풀면 퇴원생도)
+let histActiveOnly=true, histMine=true;   // 담임 계정: 기본은 내 담당 학생만   // 학생 기록: 기본은 재원생만 (체크 풀면 퇴원생도)
 async function renderHistTab(){
   const br=prefs.branch; await loadStudents(br);
   // 재원생 = 가장 최신 회차 명단에 있는 학생. 퇴원생 = 예전 회차 명단에만 있는 학생 (마지막으로 있던 명단 기준)
@@ -1311,7 +1340,8 @@ async function renderHistTab(){
   list.push(...[...lastOf.values()].map(s=>({...s,_out:true})).sort((a,b)=>koCmp(a.student_name,b.student_name)));
   const q=histQ.trim();
   const withCode=list.filter(s=>s.member_code);
-  const match=(s,q)=>(!histActiveOnly || !s._out) && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q));
+  const mineT=myTeacher();
+  const match=(s,q)=>(!histActiveOnly || !s._out) && (!mineT || !histMine || s.teacher===mineT) && (!q || s.student_name.includes(q) || s.member_code.includes(q) || String(s.class_name||'').includes(q));
   const noCode=list.length && !list.some(s=>s.member_code);
   const nOut=withCode.filter(s=>s._out).length;
   $('#tab-hist').innerHTML=`
@@ -1321,6 +1351,7 @@ async function renderHistTab(){
       <button class="btn" id="hCommon" style="width:100%;margin-top:10px">학년 공통 대비 · 회차 인쇄 (듣기 제외)</button>
       <input id="hQ" placeholder="이름·회원코드·반 검색 (코드 입력 후 Enter)" value="${esc(histQ)}" style="width:100%;margin:10px 0 6px">
       <label class="ws-item" style="cursor:pointer;margin-bottom:8px"><input type="checkbox" id="hActive" ${histActiveOnly?'checked':''}> 재원생만 보기 <span class="muted">(풀면 퇴원생 ${nOut}명도 검색)</span></label>
+      ${mineT?`<label class="ws-item" style="cursor:pointer;margin-bottom:8px"><input type="checkbox" id="hMine" ${histMine?'checked':''}> 내 담당 학생만 <span class="muted">(${esc(mineT)})</span></label>`:''}
       <div style="max-height:620px;overflow:auto">
         ${withCode.map(s=>`<div class="exam-item ${s.member_code===histCode?'sel':''}" data-code="${esc(s.member_code)}" ${match(s,q)?'':'hidden'}><b>${esc(s.student_name)}${s._out?' <span class="pill" style="background:#9ca3af">퇴원</span>':''}</b>
           <span class="muted">${esc(s.class_name)} · ${esc(s.member_code)}${s.student_no?' · '+esc(s.student_no):''}${s._out?' · 마지막 명단 '+esc(roundLabel(s.exam_round)):''}</span></div>`).join('')}
@@ -1337,6 +1368,7 @@ async function renderHistTab(){
     document.querySelectorAll('#tab-hist [data-code]').forEach(el=>{ const st=withCode.find(s=>s.member_code===el.dataset.code); const ok=!!st&&match(st,q); el.hidden=!ok; if(ok) n++; });
     $('#hEmpty').hidden=n>0; };
   $('#hActive').onchange=e=>{ histActiveOnly=e.target.checked; applyFilter(); };
+  const hm=$('#hMine'); if(hm) hm.onchange=e=>{ histMine=e.target.checked; applyFilter(); };
   hq.oninput=()=>{ histQ=hq.value; applyFilter(); };
   hq.onkeydown=e=>{ if(e.key==='Enter' && !e.isComposing && hq.value.trim()){ const v=hq.value.trim(); const found=withCode.filter(s=>match(s,v)); histCode=found.length===1?found[0].member_code:v; renderHistTab(); } };
   document.querySelectorAll('#tab-hist [data-code]').forEach(el=>el.onclick=()=>{ histCode=el.dataset.code; renderHistTab(); });
@@ -1360,7 +1392,7 @@ async function renderHistBody(code, list){
   const name=stu?stu.student_name:(last?last.student_name:'');
   const head=`<div class="row" style="justify-content:space-between"><div><h2 style="margin:0">${esc(name||'(이름 없음)')}
       <span class="muted">${esc(stu?stu.class_name:(last?last.class_name:''))} · 회원코드 ${esc(code)}${stu&&stu.student_no?' · '+esc(stu.student_no):''}</span></h2></div>
-      ${rows.length?'<button class="btn primary" id="wsOpen">모의고사 대비 문제지 만들기</button>':''}</div>`;
+      ${rows.length?'<div class="row" style="gap:8px"><button class="btn" id="crOpen">상담 리포트 (인쇄용)</button><button class="btn primary" id="wsOpen">모의고사 대비 문제지 만들기</button></div>':''}</div>`;
   if(!rows.length){
     box.innerHTML=head+`<p class="muted" style="margin-top:12px">이 회원코드로 입력된 시험이 아직 없어요. (신입생이면 같은 학년 학생들이 많이 틀린 문제로 대비 문제지를 만들 수 있어요.)</p>
       <button class="btn primary" id="wsCommon">학년 공통 대비 문제지 만들기</button>`;
@@ -1401,6 +1433,130 @@ async function renderHistBody(code, list){
   box.querySelectorAll('[data-hrep]').forEach(tr=>tr.onclick=()=>{ const o=rows[+tr.dataset.hrep]; openReport(o.ex,o.r,o.all); });
   box.querySelectorAll('[data-sub]').forEach(c=>c.onclick=()=>{ const a=subs[+c.dataset.sub]; openWrongList(name, rows, a.cat, a.sub); });
   const wo=$('#wsOpen'); if(wo) wo.onclick=()=>openWorksheet(name, code, rows);
+  const co=$('#crOpen'); if(co) co.onclick=()=>openCounselReport(name, stu, rows);
+}
+
+
+// --- 상담용 한 장 리포트 (새 창 · 인쇄하면 A4 한 장) ---
+const COUNSEL_TIPS={'듣기':'대화의 마지막 말과 상황 설명을 끝까지 듣고 고르는 연습이 필요해요.','대의파악':'첫 문장과 마지막 문장에서 글쓴이의 주장을 먼저 한 줄로 정리하는 연습을 하고 있어요.',
+  '세부정보':'선택지와 본문을 한 줄씩 대조하며 근거에 밑줄 긋는 습관을 들이고 있어요.','어법·어휘':'자주 틀리는 문법 포인트를 정리하고 문장 구조 분석 숙제를 추가할게요.',
+  '빈칸추론':'글의 핵심 주장을 먼저 정리한 뒤 빈칸에 대입하는 연습이 필요해요.','간접쓰기':'지시어·연결어 단서를 표시하며 글의 흐름을 잡는 연습을 하고 있어요.','장문독해':'긴 글은 문단별 요지를 한 줄씩 적으며 읽는 연습을 하고 있어요.'};
+const COUNSEL_CSS=`:root{--text:#1f2430;--sub:#6b7280;--line:#e6e8ec;--main:#2f5bea;--soft:#eef2ff;--ok:#15803d;--bad:#c0262d;--warn:#b45309}
+*{box-sizing:border-box}
+body{margin:0;background:#e9ebef;color:var(--text);font-family:Pretendard,-apple-system,"Malgun Gothic",sans-serif;font-size:13px}
+.bar{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;justify-content:center;padding:10px;background:#1f2430;color:#fff;font-size:13px}.bar button{border:0;background:#2f5bea;color:#fff;border-radius:8px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}[contenteditable]{outline:none;border-radius:4px}[contenteditable]:hover{background:#fffbe8}[contenteditable]:focus{background:#fff8d6}
+.note{max-width:210mm;margin:16px auto 0;padding:10px 14px;background:#fff8e6;border:1px solid #f3d38a;border-radius:8px;color:#7a4a05;font-size:13px}
+.page{width:210mm;min-height:297mm;margin:12px auto 24px;background:#fff;padding:14mm 14mm 12mm;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid var(--text);padding-bottom:8px}
+.top h1{margin:0;font-size:22px;letter-spacing:-.5px}
+.top .who{font-size:13px;color:var(--sub);margin-top:4px}
+.top .acad{text-align:right;font-size:12px;color:var(--sub)}
+.top .acad b{display:block;color:var(--text);font-size:14px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.kpi .l{color:var(--sub);font-size:11.5px}
+.kpi .v{font-size:24px;font-weight:800;margin-top:2px}
+.kpi .v small{font-size:13px;font-weight:600;color:var(--sub)}
+.kpi .d{font-size:12px;margin-top:2px}
+.kpi.main{background:var(--soft);border-color:#c7d7fe}
+.up{color:var(--ok);font-weight:700}.down{color:var(--bad);font-weight:700}
+h2{font-size:14.5px;margin:16px 0 8px;display:flex;align-items:center;gap:6px}
+h2::before{content:"";width:4px;height:14px;background:var(--main);border-radius:2px}
+.two{display:grid;grid-template-columns:1.15fr 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.legend{font-size:11px;color:var(--sub);margin-top:2px}
+.bars .row{display:grid;grid-template-columns:68px 1fr 40px;align-items:center;gap:8px;margin:6px 0}
+.bars .name{font-size:12px;font-weight:600}
+.bars .track{height:10px;background:#f1f3f5;border-radius:5px;position:relative;overflow:visible}
+.bars .fill{height:100%;border-radius:5px}
+.bars .avg{position:absolute;top:-3px;width:2px;height:16px;background:#1f2430;opacity:.55}
+.bars .pct{text-align:right;font-weight:700;font-size:12px}
+.weak{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.wk{border:1px solid #f2b0b3;background:#fff7f7;border-radius:10px;padding:10px}
+.wk .rank{font-size:11px;color:var(--bad);font-weight:800}
+.wk .t{font-weight:800;font-size:14px;margin:2px 0}
+.wk .s{font-size:12px;color:var(--sub)}
+.wk .tip{font-size:12px;margin-top:6px;line-height:1.45}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:center}
+th{background:#f7f8fa;font-weight:700;color:#374151}
+td.l{text-align:left}
+.plan li{margin:4px 0;line-height:1.5}
+.memo{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:34mm}
+.memo .lines{margin-top:6px;height:24mm;background:repeating-linear-gradient(to bottom,transparent 0 7.6mm,#e6e8ec 7.6mm 7.9mm)}
+.foot{display:flex;justify-content:space-between;color:var(--sub);font-size:11px;margin-top:10px}
+@media print{body{background:#fff}.bar{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;justify-content:center;padding:10px;background:#1f2430;color:#fff;font-size:13px}.bar button{border:0;background:#2f5bea;color:#fff;border-radius:8px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}[contenteditable]{outline:none;border-radius:4px}[contenteditable]:hover{background:#fffbe8}[contenteditable]:focus{background:#fff8d6}
+.note,.bar{display:none}[contenteditable]:hover,[contenteditable]:focus{background:none}.page{margin:0;box-shadow:none;width:auto;min-height:auto;padding:10mm 12mm}.memo{min-height:20mm}.memo .lines{height:10mm}h2{margin:10px 0 6px}.kpis{margin:10px 0}.page{zoom:.94}@page{size:A4;margin:0}}
+@media screen and (max-width:820px){.page{width:auto;min-height:auto;margin:12px 16px;padding:16px}.bar{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;justify-content:center;padding:10px;background:#1f2430;color:#fff;font-size:13px}.bar button{border:0;background:#2f5bea;color:#fff;border-radius:8px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}[contenteditable]{outline:none;border-radius:4px}[contenteditable]:hover{background:#fffbe8}[contenteditable]:focus{background:#fff8d6}
+.note{margin:16px}.kpis{grid-template-columns:repeat(2,1fr)}.two,.weak{grid-template-columns:1fr}}
+</head>`;
+function openCounselReport(name, stu, rows){
+  const L=rows[rows.length-1], P=rows.length>1?rows[rows.length-2]:null;
+  const to100=o=>o.tp?o.r.score/o.tp*100:o.r.score, f1=v=>(Math.round(v*10)/10).toString();
+  const br=L.r.branch, teacher=teacherOf(L.r,rosterSync(br,roundKey(L.ex)))||'', cls=stu?stu.class_name:L.r.class_name;
+  const g=engGrade(L.r.score,L.ex), pg=P?engGrade(P.r.score,P.ex):null;
+  const dScore=P?to100(L)-to100(P):null, dAvg=to100(L)-(L.tp?L.avgBr/L.tp*100:L.avgBr);
+  const arrow=(d,unit,inv)=>d==null?'':(Math.abs(d)<0.05?`<span>변화 없음</span>`:`<span class="${(inv?-d:d)>0?'up':'down'}">${d>0?'▲':'▼'} ${f1(Math.abs(d))}${unit}</span>`);
+  const topPct=L.nBr?Math.max(1,Math.round(L.rankBr/L.nBr*100)):0;
+  // 점수 변화 (최근 6회)
+  const T=rows.slice(-6), n=T.length, X=i=>n===1?212:60+i*(310/(n-1)), Y=v=>146-(v-40)/60*126;
+  const clampY=v=>Y(Math.max(40,Math.min(100,v)));
+  const my=T.map(to100), av=T.map(o=>o.tp?o.avgBr/o.tp*100:o.avgBr);
+  const chart=`<svg viewBox="0 0 400 170" style="width:100%"><g stroke="#eef0f3">${[100,80,60,40].map(v=>`<line x1="34" x2="390" y1="${Y(v)}" y2="${Y(v)}"/>`).join('')}</g>
+    <g font-size="10" fill="#6b7280" text-anchor="end">${[100,80,60,40].map(v=>`<text x="28" y="${Y(v)+3}">${v}</text>`).join('')}</g>
+    ${n>1?`<polyline fill="none" stroke="#9ca3af" stroke-width="2" stroke-dasharray="5 4" points="${av.map((v,i)=>X(i)+','+clampY(v)).join(' ')}"/><polyline fill="none" stroke="#2f5bea" stroke-width="2.5" points="${my.map((v,i)=>X(i)+','+clampY(v)).join(' ')}"/>`:''}
+    ${my.map((v,i)=>`<circle cx="${X(i)}" cy="${clampY(v)}" r="4" fill="#2f5bea"/><text x="${X(i)}" y="${clampY(v)-9}" font-size="11" font-weight="700" text-anchor="middle" fill="#1f2430">${Math.round(v)}</text>`).join('')}
+    ${T.map((o,i)=>`<text x="${X(i)}" y="164" font-size="10" fill="#6b7280" text-anchor="middle">${esc(fmtYM(o.date).slice(2)||'-')}</text>`).join('')}</svg>`;
+  // 영역별 정답률 (누적) + 분원 평균
+  const me={}, bb={};
+  rows.forEach(o=>{ Object.entries(o.cs).forEach(([c,v])=>{ me[c]=me[c]||{ok:0,n:0}; me[c].ok+=v.ok; me[c].n+=v.n; });
+    o.all.filter(x=>x.branch===o.r.branch).forEach(x=>Object.entries(catScores(o.ex,x.answers)).forEach(([c,v])=>{ bb[c]=bb[c]||{ok:0,n:0}; bb[c].ok+=v.ok; bb[c].n+=v.n; })); });
+  const cats=Object.keys(me).sort((a,b)=>CATS.indexOf(a)-CATS.indexOf(b));
+  const minCat=cats.slice().sort((a,b)=>pct(me[a].ok,me[a].n)-pct(me[b].ok,me[b].n))[0];
+  const bars=cats.map(c=>{ const v=pct(me[c].ok,me[c].n), a=bb[c]?pct(bb[c].ok,bb[c].n):null;
+    return `<div class="row"><span class="name">${esc(c)}</span><div class="track"><div class="fill" style="width:${v}%;background:${CAT_COLORS[c]||'#94a3b8'}"></div>${a!=null?`<i class="avg" style="left:${a}%"></i>`:''}</div><span class="pct"${c===minCat?' style="color:#c0262d"':''}>${v}%</span></div>`; }).join('');
+  // 약한 세부 유형 TOP3 (2문항 이상 본 유형 중 정답률 낮은 순)
+  const agg={};
+  rows.forEach(o=>o.ex.items.forEach((it,i)=>{ const k=(it.cat||'미지정')+'|'+(it.sub||it.cat||''); const a=agg[k]=agg[k]||{cat:it.cat||'미지정',sub:it.sub||it.cat||'',ok:0,n:0}; a.n++; if(isOk(o.r.answers[i],it)) a.ok++; }));
+  let weak=Object.values(agg).filter(a=>a.n>=2&&a.ok<a.n).sort((a,b)=>pct(a.ok,a.n)-pct(b.ok,b.n)||b.n-a.n).slice(0,3);
+  if(!weak.length) weak=Object.values(agg).filter(a=>a.ok<a.n).sort((a,b)=>pct(a.ok,a.n)-pct(b.ok,b.n)).slice(0,3);
+  const wk=weak.map((a,i)=>`<div class="wk"><div class="rank">${i+1}순위</div><div class="t">${esc(a.sub)}</div><div class="s">${esc(a.cat)} · 누적 정답률 ${pct(a.ok,a.n)}% · ${a.n}문항 중 ${a.ok}개</div><div class="tip" contenteditable="true">${esc(COUNSEL_TIPS[a.cat]||'틀린 문제를 다시 풀며 근거를 찾는 연습을 하고 있어요.')}</div></div>`).join('');
+  // 최근 시험 기록 (최근 3회)
+  const recent=rows.slice(-3).reverse().map(o=>{ const wrong=o.ex.items.filter((it,i)=>!isOk(o.r.answers[i],it)).map(it=>it.no);
+    return `<tr><td class="l">${esc(o.ex.name)}</td><td><b>${o.r.score}</b><span style="color:#6b7280">/${o.tp}</span></td><td>${engGrade(o.r.score,o.ex)}</td><td>${f1(o.avgBr)}</td><td>${o.rankBr} / ${o.nBr}</td><td class="l">${wrong.length?wrong.join(', '):'없음'}</td></tr>`; }).join('');
+  const goal=Math.min(L.tp||100, Math.ceil((L.r.score+5)/5)*5);
+  const today=new Date(), ymd=`${today.getFullYear()}.${String(today.getMonth()+1).padStart(2,'0')}.${String(today.getDate()).padStart(2,'0')}`;
+  const html=`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(name)} 상담 리포트</title><style>${COUNSEL_CSS}</style></head><body>
+  <div class="bar">노란색으로 바뀌는 글은 눌러서 고칠 수 있어요 <button onclick="window.print()">인쇄 / PDF 저장</button></div>
+  <div class="page">
+    <div class="top"><div><h1>모의고사 성적 상담 리포트</h1>
+      <div class="who"><b style="color:#1f2430;font-size:15px">${esc(name)}</b> · ${esc(normGrade(L.ex.grade)||'')}${cls?' · '+esc(cls):''}${teacher?' · 담임 '+esc(teacher):''}</div></div>
+      <div class="acad"><b>${esc(br)} 정상어학원</b>기준 시험: ${esc(L.ex.name)} · 출력 ${ymd}</div></div>
+    <div class="kpis">
+      <div class="kpi main"><div class="l">이번 점수</div><div class="v">${L.r.score}<small> / ${L.tp}</small></div><div class="d">${P?`${arrow(L.tp===P.tp?L.r.score-P.r.score:dScore,'점')} 지난 시험 ${P.r.score}점`:'첫 시험'}</div></div>
+      <div class="kpi"><div class="l">이번 등급</div><div class="v">${g}<small>등급</small></div><div class="d">${P?`${arrow(pg-g,'등급')} 지난 시험 ${pg}등급`:'&nbsp;'}</div></div>
+      <div class="kpi"><div class="l">분원 평균과 비교</div><div class="v">${dAvg>=0?'+':''}${f1(dAvg)}<small>점</small></div><div class="d">분원 평균 ${f1(L.avgBr)}점</div></div>
+      <div class="kpi"><div class="l">분원 석차</div><div class="v">${L.rankBr}<small> / ${L.nBr}명</small></div><div class="d">상위 ${topPct}%</div></div>
+    </div>
+    <div class="two">
+      <div><h2>점수 변화</h2><div class="box">${chart}<div class="legend">— ${esc(name)} · - - 분원 평균 (100점 기준)</div></div></div>
+      <div><h2>영역별 정답률 <span style="font-weight:400;font-size:11px;color:#6b7280">(누적, │ = 분원 평균)</span></h2><div class="box bars">${bars}</div></div>
+    </div>
+    ${wk?`<h2>집중해서 보완할 유형 TOP ${weak.length}</h2><div class="weak">${wk}</div>`:''}
+    <h2>최근 시험 기록</h2>
+    <table><thead><tr><th>시험</th><th>점수</th><th>등급</th><th>분원 평균</th><th>분원 석차</th><th>틀린 문항</th></tr></thead><tbody>${recent}</tbody></table>
+    <h2>다음 시험까지 할 것</h2>
+    <ol class="plan box" style="padding-left:28px;margin:0" contenteditable="true">
+      ${weak[0]?`<li>${esc(weak[0].sub)} 대비 문제지 (지난 시험 오답 + 비슷한 문제) 풀기</li>`:''}
+      <li>틀린 문제 다시 풀기 → 다음 상담 때 다시 맞힌 비율 확인</li>
+      <li>목표: 다음 시험 <b>${goal}점 이상</b></li>
+    </ol>
+    <h2>선생님 의견</h2>
+    <div class="memo"><div contenteditable="true" style="min-height:8mm;color:#6b7280;font-size:12px">상담 때 손으로 적거나, 여기를 눌러 입력한 뒤 인쇄하세요.</div><div class="lines"></div></div>
+    <div class="foot"><span>${esc(br)} 정상어학원 · 모의고사 채점 프로그램</span><span>${teacher?'담임 '+esc(teacher)+' ☐ 확인 &nbsp; ':''}학부모 ☐ 확인</span></div>
+  </div></body></html>`;
+  const w=window.open('','_blank'); if(!w) return alert('팝업이 막혀 있어요. 브라우저 주소창 옆에서 팝업을 허용해 주세요.');
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 /* ===================== 5. 관리자 분석 ===================== */
@@ -1445,7 +1601,7 @@ async function renderAdminTab(){
     if(!ex){ // 같은 회차에 같은 학년 시험이 여럿이면 응시자가 많은 시험
       let best=null, bn=-1; for(const e of choices){ const n=(await getResponses(e.id)).length; if(n>bn){ best=e; bn=n; } } ex=best;
     }
-    data[g]={ex, all:ex?await getResponses(ex.id):[], choices};
+    data[g]={ex, all:ex?await getResponses(ex.id):[], sum:ex?await getExamSummary(ex.id):[], choices};
   }
   const to100=(sc,e)=>{ const t=totalPoints(e); return t?sc/t*100:sc; };
   const diffTag=d=>`<b class="${d>0?'mark-o':d<0?'mark-x':''}">${d>0?'▲':d<0?'▼':''}${Math.abs(d).toFixed(1)}</b>`;
@@ -1456,13 +1612,13 @@ async function renderAdminTab(){
 
   // ② 전체 분원 등급 분석 (행: 분원, 선택 학년)
   const G=data[admGrade];
-  const t2=BRANCHES.map(b=>{ const l=G.ex?G.all.filter(r=>r.branch===b):[]; return {b,cnt:G.ex?gradeCounts(l,G.ex):[0,0,0,0,0],n:l.length}; });
-  const t2sum={cnt:G.ex?gradeCounts(G.all,G.ex):[0,0,0,0,0], n:G.all.length};
+  const t2=ALL_BRANCHES.map(b=>{ const l=G.ex?G.sum.filter(r=>r.branch===b):[]; return {b,cnt:G.ex?gradeCounts(l,G.ex):[0,0,0,0,0],n:l.length}; });
+  const t2sum={cnt:G.ex?gradeCounts(G.sum,G.ex):[0,0,0,0,0], n:G.sum.length};
 
   // ③ 오답률 TOP5 (선택 학년, 분원별 + 전체)
   const top3=list=>{ if(!G.ex||!list.length) return []; const wr=wrongRates(G.ex,list); return G.ex.items.map((it,i)=>({it,w:wr[i]})).sort((a,b)=>b.w-a.w||a.it.no-b.it.no).slice(0,5); };
   const topCell=(t,ri)=>t?`<span class="ws-prev" data-topq="${ri}|${t.it.no}" title="눌러서 문제 보기"><b>${t.it.no}번</b> ${pill(t.it.cat)} <span class="muted">${esc(t.it.sub||'')}</span> <b class="mark-x">${t.w}%</b></span>`:'<span class="muted">-</span>';
-  const topRows=[...BRANCHES.map(b=>({label:b,l:G.all.filter(r=>r.branch===b)})),{label:'전체',l:G.all,strong:true}].filter(x=>x.l.length||x.strong);
+  const topRows=[...ALL_BRANCHES.map(b=>({label:b,l:G.sum.filter(r=>r.branch===b)})),{label:'전체',l:G.sum,strong:true}].filter(x=>x.l.length||x.strong);
 
   // ④ 반별 성적 (선택 분원·학년) — 반 최고점 파랑, 최저점 빨강
   const mine=G.ex?G.all.filter(r=>r.branch===admBranch):[];
@@ -1498,6 +1654,7 @@ async function renderAdminTab(){
       const o=tg[b.t]=tg[b.t]||{sum:0,n:0,stu:new Set()}; o.sum+=to100(b.r.score,b.ex)-to100(a.r.score,a.ex); o.n++; o.stu.add(stuIdOf(b.r)); } });
   const teachers=[...new Set([...Object.keys(tr),...Object.keys(tg)])].sort((a,b)=>a.startsWith('(')-b.startsWith('(')||koCmp(a,b));
   const noTeacher=!(rosters[admBranch]||[]).some(s=>s.teacher) && !allResp.some(x=>x.r.teacher);
+  const teacherView=!!(ME&&ME.role==='teacher');   // 담임: 등급 분석·전체 분원 비교·오답률 TOP5만
 
   $('#tab-admin').innerHTML=`
   <div class="card">
@@ -1533,7 +1690,7 @@ async function renderAdminTab(){
     </tbody></table></div>
   </div>
 
-  <div class="card" style="margin-top:14px">
+  <div class="card" style="margin-top:14px" ${teacherView?'hidden':''}>
     <h2>반별 성적 · ${esc(admBranch)} ${admGrade}</h2>
     <p class="muted" style="margin:-6px 0 10px">반에서 가장 높은 점수는 <b style="color:#1d4ed8">파란색</b>, 가장 낮은 점수는 <b style="color:var(--bad)">빨간색</b>. 반·담임은 시험 볼 때 기준입니다.${prevEx?` 변화는 ${esc(prevEx.name)} 대비.`:''}</p>
     ${Object.keys(byCls).length?`<div class="grid-cls">${Object.keys(byCls).sort(koCmp).map(c=>{
@@ -1546,7 +1703,7 @@ async function renderAdminTab(){
       :'<p class="muted">이 분원·학년 응답이 없습니다.</p>'}
   </div>
 
-  <div class="card" style="margin-top:14px">
+  <div class="card" style="margin-top:14px" ${teacherView?'hidden':''}>
     <h2>담임별 성과 · ${esc(admBranch)} · ${roundLabel(admRound)}</h2>
     ${noTeacher?'<p class="total bad" style="margin-top:-6px">담임 정보가 없어요. 담임 열을 추가한 명단을 올려주세요.</p>':''}
     <p class="muted" style="margin:-6px 0 10px">이번 회차 고1~고3 합산. 성장은 같은 학생의 직전 시험 대비 평균 점수 변화(100점 환산)이며, 비교 가능한 학생 수를 함께 표시합니다.</p>
@@ -1557,7 +1714,7 @@ async function renderAdminTab(){
     </tbody></table></div>
   </div>
 
-  <div class="card" style="margin-top:14px">
+  <div class="card" style="margin-top:14px" ${teacherView?'hidden':''}>
     <h2>담임 누적 · ${esc(admBranch)} · 전체 회차</h2>
     <p class="muted" style="margin:-6px 0 10px">칸마다 <b>평균 점수</b> · 1등급 비율 · 학생 수. 담당 기간 성장은 학생이 연달아 본 두 시험의 점수 변화를 <b>뒤 시험 때 담임</b>의 몫으로 모아 평균 낸 값이에요 (담임이 바뀐 학생은 바뀐 뒤부터 새 담임에게).</p>
     <div style="overflow:auto"><table class="adm"><thead><tr><th>담임</th>${roundCols.map(k=>`<th>${roundLabel(k)}</th>`).join('')}<th>담당 기간 성장</th></tr></thead><tbody>
@@ -2066,12 +2223,23 @@ async function renderQsrcBox(){
 // 형식: 첫 줄 = 머리글(이름 열 + 1~45 번호 열, 회원코드 열은 있으면 사용), 그 아래 학생마다 한 줄
 async function readAnswerSheet(file, ex){
   const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
-  const aoa=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false});
-  const hi=aoa.findIndex(r=>r.filter(c=>/^\s*\d{1,2}\s*(번)?\s*$/.test(String(c))).length>=Math.min(10,ex.q_count));
-  if(hi<0) throw new Error('1, 2, 3 … 처럼 문항 번호가 적힌 머리글 줄을 찾지 못했어요.');
+  // 머리글 칸 글자에서 문항 번호 읽기: "1", "1번", "01", "1.0", "Q1", "문항1" 모두 인식 (열 위치는 상관없음)
+  const qNo=c=>{ const m=String(c??'').replace(/\s/g,'').match(/^(?:Q|문항)?0*(\d{1,2})(?:번|\.0+|\.)?$/i); const n=m?+m[1]:0; return n>=1&&n<=ex.q_count?n:0; };
+  const need=Math.min(10,ex.q_count);
+  // 모든 시트의 위쪽 30줄에서 문항 번호가 가장 많이 적힌 줄을 머리글로
+  let aoa=null, hi=-1, best=0;
+  for(const sn of wb.SheetNames){
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:'',raw:false});
+    rows.slice(0,30).forEach((r,i)=>{ const k=new Set(r.map(qNo).filter(Boolean)).size; if(k>best){ best=k; aoa=rows; hi=i; } });
+    if(best>=ex.q_count) break;
+  }
+  if(best<need){
+    const first=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false})[0]||[];
+    throw new Error(`문항 번호(1, 2, 3 …)가 적힌 머리글 줄을 찾지 못했어요. 첫 줄 내용: ${first.slice(0,14).map(c=>'['+String(c).trim()+']').join(' ')||'(비어 있음)'}`);
+  }
   const head=aoa[hi].map(c=>String(c).trim());
-  const qcol={}; head.forEach((h,i)=>{ const m=h.match(/^(\d{1,2})\s*(번)?$/); if(m && +m[1]>=1 && +m[1]<=ex.q_count && !(+m[1] in qcol)) qcol[+m[1]]=i; });
-  let ncol=head.findIndex(h=>/이름|성명|학생명/.test(h)); if(ncol<0) ncol=head.findIndex((h,i)=>!Object.values(qcol).includes(i));
+  const qcol={}; head.forEach((h,i)=>{ const n=qNo(h); if(n && !(n in qcol)) qcol[n]=i; });
+  let ncol=head.findIndex(h=>/이름|성명|학생명/.test(h)); if(ncol<0) ncol=head.findIndex((h,i)=>h && !Object.values(qcol).includes(i));
   const ccol=head.findIndex(h=>/회원\s*코드|코드|^ID$/i.test(h));
   // 본사 양식 (시험정보·응시학년·분원·선생님·ID·학생명·현재반…) 열도 있으면 같이 읽음
   const col=re=>head.findIndex(h=>re.test(h));
@@ -2155,11 +2323,134 @@ async function openAnswerImport(ex){
   };
 }
 
+/* ===================== 계정·권한 ===================== */
+// 본사(hq): 전부 / 분원 관리자(branch): 자기 분원 + 담임 계정 관리 / 담임(teacher): 자기 분원, 기본은 내 담당 학생만
+let ME=null;
+const ROLE_LABEL={hq:'본사',branch:'분원 관리자',teacher:'담임'};
+const LOGIN_DOMAIN='@high-at.app';
+const isHq=()=>!ME || ME.role==='hq';   // 로컬 테스트 모드(로그인 없음)는 본사처럼
+const canExam=()=>!ME || !!ME.exam_admin;   // 시험 등록·정답 입력: 지정된 계정만
+// 전체 분원 비교·오답률용: 본사는 원래 응답, 그 외는 이름 없이 분원·점수·답만 (서버에서 묶어서 줌)
+const SUMCACHE={};
+async function getExamSummary(examId){
+  if(isHq()||!sb) return getResponses(examId);
+  if(!SUMCACHE[examId]){ const {data,error}=await sb.rpc('mx_exam_summary',{p_exam_id:String(examId)});
+    if(error){ console.warn(error); return getResponses(examId); } SUMCACHE[examId]=data||[]; }
+  return SUMCACHE[examId];
+}
+const myTeacher=()=>ME&&ME.role==='teacher'?(ME.teacher_name||''):'';
+async function loadMe(){
+  const {data:{user}}=await sb.auth.getUser(); if(!user) return false;
+  const {data,error}=await sb.from('mx_profiles').select('*').eq('id',user.id).maybeSingle();
+  if(error||!data){ await sb.auth.signOut(); showLogin(error?('계정 정보를 불러오지 못했어요: '+error.message):'이 아이디에 연결된 계정 정보가 없어요. 본사에 문의해 주세요.'); return false; }
+  ME=data; return true;
+}
+function showLogin(msg){
+  $('#loginBg').hidden=false; const er=$('#lgErr'); er.hidden=!msg; er.textContent=msg||'';
+  $('#loginForm').onsubmit=async e=>{ e.preventDefault();
+    const id=$('#lgId').value.trim().toLowerCase(), pw=$('#lgPw').value; if(!id||!pw) return;
+    $('#lgGo').disabled=true; $('#lgGo').textContent='확인 중…'; er.hidden=true;
+    const {error}=await sb.auth.signInWithPassword({email:id.includes('@')?id:id+LOGIN_DOMAIN, password:pw});
+    $('#lgGo').disabled=false; $('#lgGo').textContent='로그인';
+    if(error){ er.hidden=false; er.textContent='아이디 또는 비밀번호가 맞지 않아요.'; return; }
+    if(!await loadMe()) return;
+    $('#loginBg').hidden=true; $('#lgPw').value=''; startApp();
+  };
+}
+function applyRole(){
+  if(!ME) return;
+  const hq=ME.role==='hq';
+  if(!hq){   // 분원 고르는 곳이 모두 내 분원 하나만 보이도록
+    BRANCHES.splice(0,BRANCHES.length,ME.branch); prefs.branch=ME.branch; resBranch=ME.branch; admBranch=ME.branch;
+  }
+  document.querySelector('nav [data-tab="exam"]').hidden=!canExam();   // 시험 등록·정답: 지정된 계정만
+  document.querySelector('nav [data-tab="roster"]').hidden=ME.role==='teacher';   // 명단 올리기: 본사·분원 관리자
+  $('#acctBtn').hidden=ME.role==='teacher';
+  const w=$('#who'); w.hidden=false;
+  w.innerHTML=`<span class="role-tag">${ROLE_LABEL[ME.role]}</span><b>${esc(ME.display_name||ME.teacher_name||ME.username)}</b>${ME.branch?`<span>${esc(ME.branch)}</span>`:''}<button id="myPw">비밀번호 변경</button><button id="logout">로그아웃</button>`;
+  $('#logout').onclick=async()=>{ await sb.auth.signOut(); location.reload(); };
+  $('#myPw').onclick=async()=>{ const pw=prompt('새 비밀번호 (6자 이상)'); if(!pw) return;
+    const {error}=await sb.rpc('mx_set_password',{p_id:ME.id,p_password:pw}); alert(error?'바꾸지 못했어요: '+error.message:'비밀번호를 바꿨어요.'); };
+}
+let appStarted=false;
+async function startApp(){
+  if(appStarted) return; appStarted=true;
+  applyRole(); await loadExams(); showTab('admin');   // 열면 관리자 분석부터 (분원 계정은 자기 분원 기준)
+}
+
+// --- 계정 관리 탭 ---
+async function renderAcctTab(){
+  const box=$('#tab-acct');
+  if(!sb||!ME){ box.innerHTML='<div class="card"><p class="muted">로컬 테스트 모드에서는 계정 관리를 쓸 수 없어요.</p></div>'; return; }
+  box.innerHTML='<div class="card"><p class="muted">불러오는 중…</p></div>';
+  const {data:list,error}=await sb.from('mx_profiles').select('*').order('role').order('branch').order('username');
+  if(error){ box.innerHTML=`<div class="card"><p class="total bad">계정 목록을 불러오지 못했어요: ${esc(error.message)}</p></div>`; return; }
+  const hq=ME.role==='hq';
+  const allBranches=hq?BRANCHES:[ME.branch];
+  const roles=hq?[['branch','분원 관리자'],['teacher','담임'],['hq','본사']]:[['teacher','담임']];
+  let fRole=roles[0][0], fBranch=allBranches[0];
+  const teacherNames=async b=>{ await loadStudents(b); return [...new Set((STU[b]||[]).map(s=>s.teacher).filter(Boolean))].sort(koCmp); };
+  const order={hq:0,branch:1,teacher:2};
+  const rows=[...list].sort((a,b)=>order[a.role]-order[b.role]||koCmp(a.branch,b.branch)||koCmp(a.username,b.username));
+  box.innerHTML=`
+  <div class="grid2">
+    <div class="card">
+      <h2 style="margin-top:0">새 계정 만들기</h2>
+      <p class="muted">${hq?'먼저 분원마다 <b>분원 관리자</b> 계정을 만들어 주세요. 각 분원 관리자는 자기 분원의 담임 계정을 직접 만들 수 있어요.':'우리 분원 담임 선생님 계정을 만들 수 있어요.'}</p>
+      <div style="display:flex;flex-direction:column;gap:10px;max-width:420px">
+        <label class="f">종류<select id="acRole">${roles.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></label>
+        <label class="f" id="acBrWrap">분원<select id="acBr">${allBranches.map(b=>`<option>${esc(b)}</option>`).join('')}</select></label>
+        <label class="f" id="acTWrap">명단의 담임 이름 <span class="muted">(학생 명단 '담임' 칸과 똑같이 — 내 담당 학생을 찾을 때 써요)</span><input id="acT" list="acTList" placeholder="예: Sage김소연"><datalist id="acTList"></datalist></label>
+        <label class="f">아이디 <span class="muted">(영문 소문자·숫자 3~30자)</span><input id="acId" autocapitalize="off" placeholder="예: namdongtan"></label>
+        <label class="f">처음 비밀번호 <span class="muted">(6자 이상 · 로그인 후 본인이 바꿀 수 있어요)</span><input id="acPw"></label>
+        <label class="f">표시 이름 <span class="muted">(선택)</span><input id="acName" placeholder="예: 남동탄 원장님"></label>
+        <button class="btn primary" id="acGo">계정 만들기</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">${hq?'전체 계정':esc(ME.branch)+' 계정'} (${rows.length})</h2>
+      <div style="overflow:auto"><table><thead><tr><th>종류</th><th>분원</th><th>아이디</th><th>이름</th><th>명단 담임 이름</th><th></th></tr></thead><tbody>
+      ${rows.map((u,i)=>{ const can=u.id!==ME.id && (hq || (u.role==='teacher'&&u.branch===ME.branch));
+        return `<tr><td><span class="role-tag">${ROLE_LABEL[u.role]}</span></td><td>${esc(u.branch||'-')}</td><td><b>${esc(u.username)}</b>${u.id===ME.id?' <span class="muted">(나)</span>':''}</td><td>${esc(u.display_name||'')}</td>
+          <td>${esc(u.teacher_name||'')}${u.role==='teacher'&&can?` <button class="btn" data-actn="${i}" style="padding:2px 8px;font-size:12px">고치기</button>`:''}</td>
+          <td style="white-space:nowrap">${can?`<button class="btn" data-acpw="${i}" style="padding:4px 10px">비번 재설정</button> <button class="btn danger" data-acdel="${i}" style="padding:4px 10px">삭제</button>`:''}</td></tr>`; }).join('')}
+      </tbody></table></div>
+      <p class="muted">로그인은 아이디만 입력하면 돼요. 비밀번호를 잊으면 여기서 '비번 재설정'으로 새로 정해주세요.</p>
+    </div>
+  </div>`;
+  const sync=async()=>{ fRole=$('#acRole').value; fBranch=$('#acBr').value;
+    $('#acBrWrap').hidden=fRole==='hq'; $('#acTWrap').hidden=fRole!=='teacher';
+    if(fRole==='teacher') $('#acTList').innerHTML=(await teacherNames(fBranch)).map(t=>`<option value="${esc(t)}">`).join(''); };
+  $('#acRole').onchange=sync; $('#acBr').onchange=sync; sync();
+  const rpcErr=e=>(e&&e.message||'').replace(/^.*?:\s*/,'')||'알 수 없는 오류';
+  $('#acGo').onclick=async()=>{
+    const id=$('#acId').value.trim().toLowerCase(), pw=$('#acPw').value, t=$('#acT').value.trim();
+    if(!id||!pw) return alert('아이디와 비밀번호를 넣어주세요.');
+    if(fRole==='teacher'&&!t&&!confirm('명단 담임 이름이 비어 있어요. 이대로 만들면 "내 담당 학생만" 보기가 안 돼요. 계속할까요?')) return;
+    $('#acGo').disabled=true;
+    const {error}=await sb.rpc('mx_create_account',{p_username:id,p_password:pw,p_role:fRole,p_branch:fRole==='hq'?null:fBranch,p_teacher:fRole==='teacher'?t:null,p_display:$('#acName').value.trim()||null});
+    $('#acGo').disabled=false;
+    if(error) return alert('만들지 못했어요: '+error.message);
+    alert(`계정을 만들었어요.\n아이디: ${id}\n비밀번호: ${pw}\n이 정보를 해당 선생님께 전달해 주세요.`); renderAcctTab();
+  };
+  document.querySelectorAll('[data-acpw]').forEach(b=>b.onclick=async()=>{ const u=rows[+b.dataset.acpw]; const pw=prompt(`${u.username} 의 새 비밀번호 (6자 이상)`); if(!pw) return;
+    const {error}=await sb.rpc('mx_set_password',{p_id:u.id,p_password:pw}); alert(error?'바꾸지 못했어요: '+error.message:`${u.username} 비밀번호를 바꿨어요.`); });
+  document.querySelectorAll('[data-acdel]').forEach(b=>b.onclick=async()=>{ const u=rows[+b.dataset.acdel]; if(!confirm(`${u.username} 계정을 삭제할까요? (입력된 성적 기록은 그대로 남아요)`)) return;
+    const {error}=await sb.rpc('mx_delete_account',{p_id:u.id}); if(error) return alert('삭제하지 못했어요: '+error.message); renderAcctTab(); });
+  document.querySelectorAll('[data-actn]').forEach(b=>b.onclick=async()=>{ const u=rows[+b.dataset.actn]; const t=prompt('명단의 담임 이름 (학생 명단 담임 칸과 똑같이)',u.teacher_name||''); if(t===null) return;
+    const {error}=await sb.rpc('mx_set_teacher_name',{p_id:u.id,p_teacher:t}); if(error) return alert('고치지 못했어요: '+error.message); renderAcctTab(); });
+}
+
 /* ===================== 시작 ===================== */
 (async()=>{
   const m=$('#mode');
   if(sb){ m.textContent='Supabase 연결됨'; m.classList.add('on'); } else { m.textContent='로컬 테스트 모드 (이 브라우저에만 저장)'; }
-  await loadExams(); showTab('admin');   // 열면 관리자 분석부터
+  if(sb){
+    const {data:{session}}=await sb.auth.getSession();
+    if(!session){ showLogin(); return; }
+    if(!await loadMe()) return;
+  }
+  startApp();
 })();
 </script>
 </body>
