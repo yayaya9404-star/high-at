@@ -2034,7 +2034,7 @@ async function openWorksheet(name, code, rows){
     const Q=await getQbank(o.ex.id);
     o.ex.items.forEach((it,i)=>{ if(isOk(o.r.answers[i],it)) return;
       const k=(it.cat||'미지정')+'|'+(it.sub||''); weakSubs[k]=(weakSubs[k]||0)+1;
-      if(Q&&Q.q[it.no]) wrong.push({ex:o.ex,it,key:k,pick:+o.r.answers[i]||0}); });
+      if(Q&&Q.q[it.no]&&it.cat!=='듣기') wrong.push({ex:o.ex,it,key:k,pick:+o.r.answers[i]||0}); });   // 듣기는 문제지 목록에서 아예 뺌
   }
   // 2) 이 학생이 안 본 시험에서 같은 세부 유형
   // 오답 다시 풀기에서 (가장 최근에) 다시 맞힌 문항 → 기본으로 문제지에서 뺌
@@ -2046,7 +2046,7 @@ async function openWorksheet(name, code, rows){
   for(const ex of [...EXAMS,...BANK]){
     if(taken.has(ex.id)) continue;
     const Q=await getQbank(ex.id); if(!Q) continue;
-    ex.items.forEach(it=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); if(weakSubs[k] && Q.q[it.no]) similar.push({ex,it,key:k}); });
+    ex.items.forEach(it=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); if(weakSubs[k] && Q.q[it.no] && it.cat!=='듣기') similar.push({ex,it,key:k}); });
   }
   const keyOrder=Object.keys(weakSubs).sort((a,b)=>weakSubs[b]-weakSubs[a]);
   const listen=k=>k.startsWith('듣기|');
@@ -2079,7 +2079,7 @@ async function openWorksheet(name, code, rows){
       <div style="flex:1;min-width:300px"><h3 id="wsHw"></h3><div id="wsListW"></div></div>
       <div style="flex:1;min-width:300px"><h3 id="wsHs"></h3><div id="wsListS"></div></div>
     </div>
-    <p class="muted">듣기 문항은 기본으로 빠져 있어요. 묶음 문제는 공통 지문이 자동으로 같이 들어가고, 마지막 장에 정답이 붙어요. 받은 워드 파일에서 자유롭게 고쳐서 인쇄하세요.</p>
+    <p class="muted">듣기 문항은 목록에서 빠져 있어요. 묶음 문제는 공통 지문이 자동으로 같이 들어가고, 마지막 장에 정답이 붙어요. 받은 워드 파일에서 자유롭게 고쳐서 인쇄하세요.</p>
     <div class="row" style="margin-top:10px"><label class="ws-item" style="cursor:pointer"><input type="checkbox" id="wsHae" checked> 맨 뒤에 해설 붙이기 (해석·어휘·해설)</label></div>
     <div class="row" style="margin-top:6px"><button class="btn primary" id="wsGo">워드로 만들기</button><span class="muted" id="wsCnt"></span></div>`;
   // 선택은 화면에 보이는(필터 통과한) 문항만 문제지에 들어감
@@ -2154,7 +2154,7 @@ async function openCommonWorksheet({name='', grade=''}={}){
       const Q=await getQbank(ex.id); if(!Q) continue;
       const rs=(await getExamSummary(ex.id)).filter(r=>st.scope==='all'||r.branch===prefs.branch); if(!rs.length) continue;
       const wr=wrongRates(ex,rs);
-      ex.items.forEach((it,i)=>{ if(!Q.q[it.no]) return; if(!st.listen && it.cat==='듣기') return;
+      ex.items.forEach((it,i)=>{ if(!Q.q[it.no]) return; if(it.cat==='듣기') return;   // 듣기는 빼기
         if(wr[i]!=null && wr[i]>=st.th) items.push({ex,it,rate:wr[i],n:rs.length}); });
     }
     items.sort((a,b)=>b.rate-a.rate || koCmp(examDateKey(b.ex),examDateKey(a.ex)) || a.it.no-b.it.no);
@@ -2165,7 +2165,6 @@ async function openCommonWorksheet({name='', grade=''}={}){
         <label class="f">회차 범위<select id="cwRecent"><option value="0">전체 회차</option>${[1,2,3,4,5,6,8].filter(n=>n<roundsDesc.length).map(n=>`<option value="${n}" ${n===st.recentN?'selected':''}>최근 ${n}회차</option>`).join('')}</select></label>
         <label class="f">오답률 기준<select id="cwTh">${[30,40,50,60,70].map(v=>`<option value="${v}" ${v===st.th?'selected':''}>${v}% 이상</option>`).join('')}</select></label>
         <label class="f">학생 범위<select id="cwScope"><option value="all" ${st.scope==='all'?'selected':''}>전체 분원 학생</option><option value="br" ${st.scope==='br'?'selected':''}>${esc(prefs.branch)} 학생만</option></select></label>
-        <label class="ws-item" style="cursor:pointer"><input type="checkbox" id="cwListen" ${st.listen?'checked':''}> 듣기 포함</label>
       </div>
       <p class="muted" style="margin:0 0 6px">${esc(st.grade)} 시험(시험지 워드 등록된 것)에서 오답률이 높은 문항 순서예요. 문항을 누르면 미리 볼 수 있어요.</p>
       ${items.length?`<label class="ws-item" style="cursor:pointer;font-weight:700"><input type="checkbox" id="cwAll" checked> 전체 선택</label>
@@ -2181,7 +2180,6 @@ async function openCommonWorksheet({name='', grade=''}={}){
     $('#cwRecent').onchange=e=>{ st.recentN=+e.target.value; renderCommon(); };
     $('#cwTh').onchange=e=>{ st.th=+e.target.value; renderCommon(); };
     $('#cwScope').onchange=e=>{ st.scope=e.target.value; renderCommon(); };
-    $('#cwListen').onchange=e=>{ st.listen=e.target.checked; renderCommon(); };
     pvBind(items); cnt();
     $('#cwGo').onclick=()=>go($('#cwGo'), $('#cwTitle').value.trim()||'모의고사 대비 문제지', picked(), $('#cwHae').checked, false);
   }
