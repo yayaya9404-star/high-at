@@ -239,6 +239,7 @@ const LS = {
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(16)+Math.random().toString(16).slice(2));
 const nowIso = () => new Date().toISOString();
 
+let ALLFILES=null;   // 시험 파일 목록 캐시 (exam_id → 파일들)
 const DB = {
   async exams(){
     if(sb){ const {data,error}=await sb.from('mx_exams').select('*').order('created_at',{ascending:false}); if(error) throw error; return data; }
@@ -311,7 +312,11 @@ const DB = {
   },
   async files(examId){
     if(!sb) return [];
-    const {data,error}=await sb.from('mx_exam_files').select('*').eq('exam_id',examId).order('created_at'); if(error) throw error; return data;
+    if(!ALLFILES){   // 모든 시험의 파일 목록을 한 번에 (시험마다 따로 묻지 않도록)
+      ALLFILES=(async()=>{ const {data,error}=await sb.from('mx_exam_files').select('*').order('created_at').range(0,9999); if(error){ ALLFILES=null; throw error; }
+        const m={}; data.forEach(f=>(m[f.exam_id]=m[f.exam_id]||[]).push(f)); return m; })();
+    }
+    return ((await ALLFILES)[examId]||[]).slice();
   },
   async uploadFile(examId,file,idx){
     const ext=(file.name.split('.').pop()||'bin').toLowerCase().replace(/[^a-z0-9]/g,'');
@@ -319,12 +324,13 @@ const DB = {
     const up=await sb.storage.from(FILE_BUCKET).upload(path,file,{contentType:file.type||undefined});
     if(up.error) throw up.error;
     const {error}=await sb.from('mx_exam_files').insert({exam_id:examId,file_name:file.name,path});
+    ALLFILES=null;
     if(error) throw error;
   },
   fileUrl(f){ return sb.storage.from(FILE_BUCKET).getPublicUrl(f.path,{download:f.file_name}).data.publicUrl; },
   async deleteFile(f){
     await sb.storage.from(FILE_BUCKET).remove([f.path]);
-    const {error}=await sb.from('mx_exam_files').delete().eq('id',f.id); if(error) throw error;
+    const {error}=await sb.from('mx_exam_files').delete().eq('id',f.id); ALLFILES=null; if(error) throw error;
   }
 };
 
@@ -396,6 +402,12 @@ async function loadExams(){
   // 문제은행 전용 시험(학생이 응시하지 않음)은 BANK로 따로 — 분석·OMR·결과 화면에는 안 나오고, 대비 문제지·회차 인쇄에만 쓰임
   let all=[]; try{ all = await DB.exams(); }catch(e){ alert('시험 목록을 불러오지 못했습니다: '+e.message); }
   EXAMS = all.filter(e=>!e.is_bank); BANK = all.filter(e=>e.is_bank);
+}
+// 여러 개를 동시에 (최대 n개씩) 불러오기 — 하나씩 차례로 기다리던 것을 병렬로
+async function pmap(list, fn, n=6){
+  const out=new Array(list.length); let i=0;
+  await Promise.all(Array.from({length:Math.min(n,list.length)},async()=>{ while(i<list.length){ const k=i++; try{ out[k]=await fn(list[k],k); }catch(e){ console.warn(e); } } }));
+  return out;
 }
 async function getResponses(examId, force){
   if(force || !resCache[examId]){
@@ -1420,6 +1432,7 @@ async function renderHistBody(code, list){
   const box=$('#hBody'); if(!box) return;
   let rs; try{ rs=await DB.responsesByMember(code); }catch(e){ box.innerHTML='<p class="muted">기록을 불러오지 못했습니다: '+esc(e.message)+'</p>'; return; }
   const rows=[];
+  await pmap([...new Set(rs.map(r=>r.exam_id))].filter(id=>examById(id)), id=>getResponses(id));   // 병렬로 미리
   for(const r of rs){
     const ex=examById(r.exam_id); if(!ex) continue;
     const all=await getResponses(ex.id);
@@ -1711,7 +1724,8 @@ async function renderAdminTab(){
   if(!admBranch) admBranch=prefs.branch;
   const rounds=allRounds();
   if(!admRound || !rounds.includes(admRound)) admRound=rounds[0]||'';
-  const rosters={}; for(const b of BRANCHES) rosters[b]=await getStudents(b);
+  const rosters={}; await pmap(BRANCHES, async b=>{ rosters[b]=await getStudents(b); });
+  await pmap(EXAMS, e=>getResponses(e.id));   // 아래에서 쓰는 응답을 한 번에 미리
   const data={};   // 학년 → {ex, all, choices}
   for(const g of ADM_GRADES){
     const choices=admExamsOf(g, admRound);
@@ -1869,7 +1883,7 @@ async function saveQsrc(examId, file){
     const path=`${examId}/${QSRC_PREFIX}${Date.now()}.docx`;
     const up=await sb.storage.from(FILE_BUCKET).upload(path,new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}));
     if(up.error) throw up.error;
-    const {error}=await sb.from('mx_exam_files').insert({exam_id:examId,file_name:file.name,path}); if(error) throw error;
+    const {error}=await sb.from('mx_exam_files').insert({exam_id:examId,file_name:file.name,path}); ALLFILES=null; if(error) throw error;
   } else {
     try{ localStorage.setItem('mx_qsrc_'+examId, JSON.stringify({name:file.name,data:b64(buf)})); }
     catch(e){ throw new Error('브라우저 저장공간이 부족해요. Supabase에 연결하면 용량 걱정 없이 저장돼요.'); }
@@ -1881,7 +1895,12 @@ async function qsrcInfo(examId){
   try{ const v=JSON.parse(localStorage.getItem('mx_qsrc_'+examId)||'null'); return v?{name:v.name}:null; }catch(e){ return null; }
 }
 async function loadQsrcBuf(examId){
-  if(sb){ const f=await qsrcFile(examId); if(!f) return null; const res=await fetch(DB.fileUrl(f)); if(!res.ok) throw new Error('시험지 워드를 내려받지 못했어요.'); return await res.arrayBuffer(); }
+  if(sb){ const f=await qsrcFile(examId); if(!f) return null; const url=DB.fileUrl(f);
+    // 브라우저에 보관해 두고 다음부터는 바로 (파일 이름에 올린 시각이 들어가 있어 바뀌면 새 파일로 받음)
+    let cache=null; try{ cache=await caches.open('mx-qsrc-v1'); const hit=await cache.match(url); if(hit) return await hit.arrayBuffer(); }catch(e){ cache=null; }
+    const res=await fetch(url); if(!res.ok) throw new Error('시험지 워드를 내려받지 못했어요.');
+    if(cache){ try{ await cache.put(url, res.clone()); }catch(e){} }
+    return await res.arrayBuffer(); }
   try{ const v=JSON.parse(localStorage.getItem('mx_qsrc_'+examId)||'null'); return v?unb64(v.data):null; }catch(e){ return null; }
 }
 
@@ -1927,10 +1946,15 @@ async function parseDocx(buf){
   const rels=new DOMParser().parseFromString(relsXml,'application/xml');
   return {zip, doc, els, q, grp, hq, hgrp, rels};
 }
+const QLOADING={};   // 같은 시험지를 동시에 두 번 받지 않도록
 async function getQbank(examId){
   if(!(examId in QCACHE)){
-    try{ const buf=await loadQsrcBuf(examId); QCACHE[examId]=buf?await parseDocx(buf):null; }
-    catch(e){ console.warn(e); QCACHE[examId]=null; }
+    if(!QLOADING[examId]) QLOADING[examId]=(async()=>{
+      try{ const buf=await loadQsrcBuf(examId); QCACHE[examId]=buf?await parseDocx(buf):null; }
+      catch(e){ console.warn(e); QCACHE[examId]=null; }
+      delete QLOADING[examId];
+    })();
+    await QLOADING[examId];
   }
   return QCACHE[examId];
 }
@@ -2001,6 +2025,9 @@ async function openWorksheet(name, code, rows){
   $('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(name)} 모의고사 대비 문제지</h2><button class="btn" id="closeM">닫기</button></div><div id="wsBody"><p class="muted">시험지 불러오는 중…</p></div>`;
   $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
   $('#modalBg').classList.add('show');
+  // 필요한 시험지 워드를 한꺼번에(병렬로) 미리 받아 둠
+  const need=[...new Set([...rows.map(o=>o.ex.id), ...[...EXAMS,...BANK].map(e=>e.id)])]; let done=0;
+  await pmap(need, async id=>{ await getQbank(id); done++; const b=$('#wsBody'); if(b) b.innerHTML=`<p class="muted">시험지 불러오는 중… (${done}/${need.length})</p>`; });
   // 1) 학생이 틀린 문제 (시험지 워드 등록된 시험)
   const wrong=[], weakSubs={};
   for(const o of rows){
@@ -2112,6 +2139,7 @@ async function openCommonWorksheet({name='', grade=''}={}){
     const body=$('#cwBody'); body.innerHTML='<p class="muted">시험지·응답 불러오는 중…</p>';
     const exs=EXAMS.filter(e=>normGrade(e.grade)===st.grade);
     const roundsDesc=[...new Set(exs.map(roundKey))].sort((a,b)=>koCmp(b,a));
+    await pmap(exs, async e=>{ await getQbank(e.id); await getExamSummary(e.id); });   // 병렬로 미리
     const items=[];
     for(const ex of exs){
       if(st.recentN && !roundsDesc.slice(0,st.recentN).includes(roundKey(ex))) continue;
