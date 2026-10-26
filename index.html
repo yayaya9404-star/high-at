@@ -461,7 +461,7 @@ function examGroupsHtml(){
     const open=exOpen.has(k)||(editing&&L.some(e=>e.id===editing.id))||(!exOpen.size&&k===latest);
     const label=k?`${k.slice(0,4)}년 ${+k.slice(5,7)}월`:'시행 연·월 없음';
     const grades=[...new Set(L.map(gradeKey))];
-    return `<details class="ex-grp" data-ym="${k}" ${open?'open':''}><summary><b>${label}</b> <span class="muted">${grades.join(' · ')} · ${L.length}개</span></summary>
+    return `<details class="ex-grp" data-ym="${k}" ${open?'open':''}><summary><b>${label}</b> <span class="muted">${grades.join(' · ')}</span></summary>
       ${L.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}"><span class="pill" style="background:#64748b">${esc(gradeKey(e))}</span><b>${esc(e.name)}</b>${e.is_bank?'<span class="pill" style="background:#7e3fb3">문제은행</span>':`<span class="muted">${totalPoints(e)}점</span>`}</div>`).join('')}</details>`; }).join('');
 }
 function renderExamTab(){
