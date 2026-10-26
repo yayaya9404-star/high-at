@@ -251,6 +251,20 @@ const DB = {
     LS.set('mx_exams',LS.get('mx_exams',[]).filter(x=>x.id!==id));
     LS.set('mx_responses',LS.get('mx_responses',[]).filter(x=>x.exam_id!==id));
   },
+  // 오답 다시 풀기 기록 (모의고사 점수와 별도)
+  async retries(respIds){
+    if(!respIds.length) return [];
+    if(sb){ const out=[]; for(let i=0;i<respIds.length;i+=100){ const {data,error}=await sb.from('mx_retries').select('*').in('response_id',respIds.slice(i,i+100)).order('created_at'); if(error) throw error; out.push(...data); } return out; }
+    return LS.get('mx_retries',[]).filter(x=>respIds.includes(x.response_id));
+  },
+  async addRetries(rows){
+    if(sb){ const {error}=await sb.from('mx_retries').insert(rows); if(error) throw error; return; }
+    LS.set('mx_retries',[...LS.get('mx_retries',[]),...rows.map(r=>({...r,id:uid(),created_at:nowIso()}))]);
+  },
+  async deleteRetry(id){
+    if(sb){ const {error}=await sb.from('mx_retries').delete().eq('id',id); if(error) throw error; return; }
+    LS.set('mx_retries',LS.get('mx_retries',[]).filter(x=>x.id!==id));
+  },
   async responsesByMember(code){
     if(sb){ const {data,error}=await sb.from('mx_responses').select('*').eq('member_code',code); if(error) throw error; return data; }
     return LS.get('mx_responses',[]).filter(x=>x.member_code===code);
@@ -336,7 +350,7 @@ function makeItems(n, answers='', three=[], useStd=false){
   });
 }
 
-let EXAMS=[], editing=null, omrExamId=null, resExamId=null, resCache={}, editingResp=null;
+let EXAMS=[], BANK=[], editing=null, omrExamId=null, resExamId=null, resCache={}, editingResp=null;
 let STU={}, omrCur=null;   // STU: 분원별 명단 캐시, omrCur: 명단 모드에서 현재 학생 키
 const stuKey = s => s.member_code || ('n:'+s.class_name+'|'+s.student_name);  // 동명이인 구분
 
@@ -372,7 +386,9 @@ async function getRoster(branch, rk, force){ await loadStudents(branch,force); r
 async function getStudents(branch, force){ await loadStudents(branch,force); return rosterSync(branch, rosterRounds(branch)[0]); }   // 최신 회차 명단
 
 async function loadExams(){
-  try{ EXAMS = await DB.exams(); }catch(e){ alert('시험 목록을 불러오지 못했습니다: '+e.message); EXAMS=[]; }
+  // 문제은행 전용 시험(학생이 응시하지 않음)은 BANK로 따로 — 분석·OMR·결과 화면에는 안 나오고, 대비 문제지·회차 인쇄에만 쓰임
+  let all=[]; try{ all = await DB.exams(); }catch(e){ alert('시험 목록을 불러오지 못했습니다: '+e.message); }
+  EXAMS = all.filter(e=>!e.is_bank); BANK = all.filter(e=>e.is_bank);
 }
 async function getResponses(examId, force){
   if(force || !resCache[examId]){
@@ -380,7 +396,7 @@ async function getResponses(examId, force){
   }
   return resCache[examId];
 }
-const examById = id => EXAMS.find(e=>e.id===id);
+const examById = id => EXAMS.find(e=>e.id===id) || BANK.find(e=>e.id===id);
 /* 시험 고르기: 회차 → 학년 (같은 회차·학년에 시험이 여럿이면 시험 이름까지) */
 const fmtYM = d => d ? `${d.slice(0,4)}.${d.slice(5,7)}` : '';
 const gradeKey = e => normGrade(e.grade) || '학년 없음';
@@ -438,6 +454,8 @@ function renderExamTab(){
       ${EXAMS.length? EXAMS.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}">
         <b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} ${e.exam_date?roundLabel(roundKey(e)):'시행 연·월 없음'} · ${e.q_count}문항 · ${totalPoints(e)}점</span></div>`).join('')
         : '<p class="muted">등록된 시험이 없습니다.</p>'}
+      ${BANK.length?`<h3 style="margin:16px 0 8px">문제은행 <span class="muted" style="font-weight:400;font-size:12px">(대비 문제지 전용 · ${BANK.length}개)</span></h3>
+        ${BANK.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}"><b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} · ${e.q_count}문항 · 문제은행</span></div>`).join('')}`:''}
     </div>
     <div class="card" id="examEditor">${importMode? importHtml() : editing? editorHtml() : '<p class="muted">왼쪽에서 시험을 선택하거나 새로 만드세요.</p>'}</div>
   </div>`;
@@ -461,6 +479,7 @@ function editorHtml(){
     <label class="f">학년<input id="exGrade" value="${esc(e.grade)}" style="width:80px"></label>
     <label class="f">시행 연·월<input id="exDate" type="month" value="${esc((e.exam_date||'').slice(0,7))}"></label>
     <label class="f">문항 수<input id="exQ" type="number" min="1" max="100" value="${e.q_count}" style="width:80px"></label>
+    <label class="ws-item" style="cursor:pointer;align-self:flex-end;padding-bottom:8px" title="학생이 응시하지 않는 시험. 관리자 분석·결과·OMR 입력에는 안 나오고, 대비 문제지(비슷한 문제)와 회차 인쇄에만 쓰여요."><input type="checkbox" id="exBank" ${e.is_bank?'checked':''}> 문제은행 전용 (학생 응시 안 함)</label>
   </div>
   <details id="pasteBox" style="margin-top:16px" ${e._new?'open':''}>
     <summary style="cursor:pointer;font-weight:700">시험 정보 한 번에 붙여넣기</summary>
@@ -505,7 +524,7 @@ function parseExamText(t){
   const out={types:{}};
   t.split(/\r?\n/).forEach(raw=>{
     const line=raw.trim(); if(!line) return;
-    let m=line.match(/^(시험\s*명|학년|시행\s*일|문항\s*수|정답|3점(?:\s*문항)?|유형)\s*[:：]\s*(.*)$/);
+    let m=line.match(/^(시험\s*명|학년|시행\s*일|문항\s*수|정답|3점(?:\s*문항)?|유형|용도)\s*[:：]\s*(.*)$/);
     if(m){
       const k=m[1].replace(/\s/g,''), v=m[2].trim();
       if(k==='시험명') out.name=v;
@@ -514,6 +533,7 @@ function parseExamText(t){
       else if(k==='문항수') out.q=+v.replace(/\D/g,'')||0;
       else if(k==='정답') out.answers=v.replace(/[^0-5]/g,'');
       else if(k.startsWith('3점')) out.three=v.split(/[^0-9]+/).filter(Boolean).map(Number);
+      else if(k==='용도') out.bank=/문제\s*은행/.test(v);
       return;
     }
     m=line.match(/^(\d{1,3})\s*[.|,\t ]?\s*(듣기|대의\s*파악|세부\s*정보|어법\s*[·ㆍ.\/]?\s*어휘|빈칸\s*추론|간접\s*쓰기|장문\s*독해)\s*[|,\t\/:-]*\s*(.*)$/);
@@ -525,7 +545,7 @@ function parseExamText(t){
   return out;
 }
 function syncEditorFields(){
-  editing.name=$('#exName').value.trim(); editing.grade=$('#exGrade').value.trim(); editing.exam_date=$('#exDate').value?$('#exDate').value+'-01':'';   // 날짜는 1일로 저장
+  editing.name=$('#exName').value.trim(); editing.grade=$('#exGrade').value.trim(); const bk=$('#exBank'); if(bk) editing.is_bank=bk.checked; editing.exam_date=$('#exDate').value?$('#exDate').value+'-01':'';   // 날짜는 1일로 저장
 }
 function bindEditor(){
   const e=editing;
@@ -549,6 +569,7 @@ function bindEditor(){
     if(d.name) e.name=d.name;
     if(d.grade) e.grade=d.grade;
     if(d.date) e.exam_date=d.date;
+    if(d.bank!==undefined) e.is_bank=d.bank;
     if(d.answers) e.items.forEach((it,i)=>it.answer=+d.answers[i]||0);
     if(d.three) e.items.forEach(it=>it.points=d.three.includes(it.no)?3:2);
     let applied=0;
@@ -584,6 +605,7 @@ function bindEditor(){
     if(tp!==100 && !confirm(`총점이 ${tp}점입니다. 그래도 저장할까요?`)) return;
     if(!oxOnly(e) && e.items.some(i=>!i.answer) && !confirm('정답이 비어 있는 문항이 있습니다. 그래도 저장할까요?')) return;
     const rec={id:e.id,name:e.name,grade:e.grade,exam_date:e.exam_date||null,q_count:e.q_count,items:e.items};
+    if(e.is_bank || e.is_bank===false) rec.is_bank=!!e.is_bank;
     if(!sb) rec.created_at = e.created_at || nowIso();
     try{
       const saved=await DB.saveExam(rec);
@@ -592,7 +614,7 @@ function bindEditor(){
       for(const r of rs){ const g=gradeAnswers(saved,r.answers); if(g.score!==r.score){ r.score=g.score; await DB.saveResponse(r); } }
       await loadExams(); editing=JSON.parse(JSON.stringify(saved)); renderExamTab();
       alert('저장했습니다.'+(rs.length?` (응답 ${rs.length}건 점수 재계산)`:''));
-    }catch(err){ alert('저장 실패: '+err.message); }
+    }catch(err){ alert('저장 실패: '+err.message+(/is_bank/.test(err.message||'')?'\n\nSupabase SQL Editor에서 먼저 실행해 주세요:\nalter table mx_exams add column if not exists is_bank boolean not null default false;':'')); }
   };
   const d=$('#delExam'); if(d) d.onclick=async()=>{
     if(!confirm(`'${e.name}' 시험과 입력된 학생 응답을 모두 삭제합니다. 되돌릴 수 없습니다.`)) return;
@@ -1427,13 +1449,90 @@ async function renderHistBody(code, list){
       <div style="margin-top:6px;font-weight:600">${esc(a.sub||'-')}</div>
       <div class="bar"><i style="width:${v}%;background:${v<50?'var(--bad)':v<80?'var(--warn)':'var(--ok)'}"></i></div><div class="muted" style="margin-top:4px">${v}%</div></div>`; }).join('')}</div>`;
 
-  box.innerHTML=head+chart+table+weak;
+  // 오답 다시 풀기 (모의고사 점수와 별도 기록)
+  let retries=[]; try{ retries=await DB.retries(rows.map(o=>o.r.id)); }catch(e){ console.warn(e); retries=null; }
+  const RS=retries?retryStats(rows,retries):null;
+  const retryHtml=`<h3>오답 다시 풀기 <span class="muted" style="font-weight:400;font-size:12px">(모의고사 점수와 따로 기록돼요)</span></h3>
+    ${retries===null?'<p class="muted">다시 풀기 기록을 불러오지 못했어요. Supabase에 오답 다시 풀기 표(SQL)를 먼저 만들어 주세요.</p>':`
+    <div class="row" style="gap:16px;align-items:center">
+      ${RS.tried?`<span>다시 푼 문항 <b>${RS.tried}</b>개 중 <b class="mark-o">${RS.ok}</b>개 맞힘 <b>(${pct(RS.ok,RS.tried)}%)</b></span>${RS.same?`<span class="muted">같은 오답 또 고름 ${RS.same}개</span>`:''}`:'<span class="muted">아직 다시 푼 기록이 없어요.</span>'}
+      <span class="muted">남은 오답 ${RS.left}개</span>
+      <button class="btn primary" id="rtOpen">오답 다시 풀기 입력</button></div>
+    ${RS.still.length?`<p style="margin:8px 0 0;line-height:1.9"><span class="muted">다시 풀어도 틀린 문항:</span> ${RS.still.map(x=>`<span class="pill" style="background:var(--bad-bg);color:var(--bad)">${esc(x.ex.name)} ${x.no}번</span>`).join(' ')}</p>`:''}`}`;
+  box.innerHTML=head+chart+table+weak+retryHtml;
+  const ro=$('#rtOpen'); if(ro) ro.onclick=()=>openRetry(name, rows, retries, ()=>renderHistBody(code, list));
   box.querySelectorAll('[data-hrep]').forEach(tr=>tr.onclick=()=>{ const o=rows[+tr.dataset.hrep]; openReport(o.ex,o.r,o.all); });
   box.querySelectorAll('[data-sub]').forEach(c=>c.onclick=()=>{ const a=subs[+c.dataset.sub]; openWrongList(name, rows, a.cat, a.sub); });
   const wo=$('#wsOpen'); if(wo) wo.onclick=()=>openWorksheet(name, code, rows);
-  const co=$('#crOpen'); if(co) co.onclick=()=>openCounselReport(name, stu, rows);
+  const co=$('#crOpen'); if(co) co.onclick=()=>openCounselReport(name, stu, rows, RS);
 }
 
+
+
+// --- 오답 다시 풀기 ---
+// 문항별 가장 최근 시도로 판단: 다시 맞힘 / 또 틀림(같은 오답이면 따로 셈)
+function retryStats(rows, retries){
+  const byKey={}; (retries||[]).forEach(t=>(byKey[t.response_id+'|'+t.item_no]=byKey[t.response_id+'|'+t.item_no]||[]).push(t));
+  let tried=0, ok=0, same=0, left=0; const still=[];
+  rows.forEach(o=>o.ex.items.forEach((it,i)=>{ if(isOk(o.r.answers[i],it)) return;
+    const h=byKey[o.r.id+'|'+it.no]; if(!h||!h.length){ left++; return; }
+    const last=h[h.length-1]; tried++;
+    if(last.correct) ok++; else { left++; still.push({ex:o.ex,no:it.no}); if(String(last.pick)===String(o.r.answers[i])) same++; } }));
+  return {tried, ok, same, left, still, byKey};
+}
+function openRetry(name, rows, retries, onDone){
+  const RS=retryStats(rows, retries);
+  const list=[]; [...rows].reverse().forEach(o=>o.ex.items.forEach((it,i)=>{ if(!isOk(o.r.answers[i],it)) list.push({o,it,i,hist:RS.byKey[o.r.id+'|'+it.no]||[]}); }));
+  let hideOk=true, exSel='';
+  $('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(name)} · 오답 다시 풀기 입력</h2><button class="btn" id="closeM">닫기</button></div>
+    <p class="muted" style="margin:6px 0 10px">학생이 다시 풀어서 고른 번호(1~5)를 칸에 넣고 저장하세요. 숫자를 치면 다음 칸으로 넘어가요. 모의고사 점수는 바뀌지 않아요.</p>
+    <div class="row" style="gap:14px;margin-bottom:8px">
+      <label class="f">시험<select id="rtEx"><option value="">전체 시험</option>${rows.slice().reverse().map(o=>`<option value="${esc(o.r.id)}">${esc(o.ex.name)}</option>`).join('')}</select></label>
+      <label class="ws-item" style="cursor:pointer;align-self:flex-end;padding-bottom:6px"><input type="checkbox" id="rtHide" checked> 다시 맞힌 문항 숨기기</label>
+    </div>
+    <div id="rtList" style="max-height:470px;overflow:auto;border:1px solid var(--line);border-radius:8px"></div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" id="rtSave">저장</button><span class="muted" id="rtCnt"></span></div>`;
+  $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
+  $('#modalBg').classList.add('show');
+  const mark=t=>`<span class="pill" data-rtdel="${esc(t.id)}" title="눌러서 이 기록 지우기" style="cursor:pointer;${t.correct?'background:var(--ok-bg);color:var(--ok)':'background:var(--bad-bg);color:var(--bad)'}">${(t.created_at||'').slice(5,10).replace('-','/')} ${+t.pick?circled(+t.pick):'무응답'} ${t.correct?'○':'✕'}</span>`;
+  const render=()=>{
+    const vis=list.filter(x=>(!exSel||x.o.r.id===exSel) && !(hideOk && x.hist.length && x.hist[x.hist.length-1].correct));
+    let last='';
+    $('#rtList').innerHTML=vis.length?`<table><thead><tr><th>시험</th><th>번호</th><th>유형</th><th>처음 고른 답</th><th>정답</th><th>다시 푼 기록</th><th>이번에 고른 번호</th></tr></thead><tbody>
+      ${vis.map(x=>{ const j=list.indexOf(x), first=x.o.r.answers[x.i], head=x.o.ex.name!==last; last=x.o.ex.name;
+        return `<tr${head?' style="border-top:2px solid var(--line)"':''}><td>${head?`<b>${esc(x.o.ex.name)}</b>`:''}</td><td><span class="ws-prev" data-rtpv="${j}" title="눌러서 문제 보기"><b>${x.it.no}번</b> ▾</span></td>
+          <td>${pill(x.it.cat)} <span class="muted">${esc(x.it.sub||'')}</span></td><td>${+first?circled(+first):'<span class="muted">-</span>'}</td><td>${circled(+x.it.answer)}</td>
+          <td style="line-height:1.9">${x.hist.map(mark).join(' ')||'<span class="muted">-</span>'}</td>
+          <td><input data-rt="${j}" maxlength="1" inputmode="numeric" style="width:46px;text-align:center;font-weight:700"></td></tr>
+          <tr class="qpv-row" data-rtpvrow="${j}" hidden><td colspan="7"></td></tr>`; }).join('')}</tbody></table>`
+      :`<p class="muted" style="padding:12px">${list.length?'보여줄 문항이 없어요. (다시 맞힌 문항 숨기기를 풀어 보세요)':'틀린 문항이 없어요.'}</p>`;
+    const ins=[...document.querySelectorAll('[data-rt]')];
+    const cnt=()=>{ $('#rtCnt').textContent=`${ins.filter(i=>/^[0-5]$/.test(i.value)).length}문항 입력`; };
+    ins.forEach((inp,k)=>{ inp.oninput=()=>{ inp.value=inp.value.replace(/[^0-5]/g,''); const j=+inp.dataset.rt, x=list[j];
+        inp.style.color=inp.value===''?'':(+inp.value===+x.it.answer?'var(--ok)':'var(--bad)'); cnt(); if(inp.value&&ins[k+1]) ins[k+1].focus(); };
+      inp.onkeydown=e=>{ if(e.key==='Backspace'&&!inp.value&&ins[k-1]){ ins[k-1].focus(); } }; });
+    cnt();
+    document.querySelectorAll('[data-rtpv]').forEach(el=>el.onclick=async()=>{ const j=+el.dataset.rtpv, x=list[j], tr=document.querySelector(`[data-rtpvrow="${j}"]`);
+      if(!tr.hidden){ tr.hidden=true; return; } tr.hidden=false; const td=tr.firstElementChild;
+      if(!td.innerHTML){ td.innerHTML='<span class="muted">불러오는 중…</span>'; const Q=await getQbank(x.o.ex.id);
+        td.innerHTML=Q&&Q.q[x.it.no]?`<div class="q-body" style="margin:0">${chunkHtml(Q,qIndexes(Q,x.it.no),+x.o.r.answers[x.i]||0,+x.it.answer||0)}</div>`:'<span class="muted">시험지 워드가 등록되지 않은 시험이에요.</span>'; } });
+    document.querySelectorAll('[data-rtdel]').forEach(el=>el.onclick=async()=>{ if(!confirm('이 다시 풀기 기록을 지울까요?')) return;
+      try{ await DB.deleteRetry(el.dataset.rtdel); const id=el.dataset.rtdel; list.forEach(x=>x.hist=x.hist.filter(t=>t.id!==id)); render(); onDone&&onDone(); }catch(err){ alert('지우지 못했어요: '+err.message); } });
+  };
+  $('#rtEx').onchange=e=>{ exSel=e.target.value; render(); };
+  $('#rtHide').onchange=e=>{ hideOk=e.target.checked; render(); };
+  render();
+  $('#rtSave').onclick=async()=>{
+    const todo=[...document.querySelectorAll('[data-rt]')].filter(i=>/^[0-5]$/.test(i.value)).map(i=>{ const x=list[+i.dataset.rt], r=x.o.r;
+      return {response_id:String(r.id), exam_id:String(x.o.ex.id), branch:r.branch, member_code:r.member_code||null, student_name:r.student_name, class_name:r.class_name||'',
+        item_no:x.it.no, pick:+i.value, correct:+i.value===+x.it.answer}; });
+    if(!todo.length) return alert('입력한 번호가 없어요.');
+    $('#rtSave').disabled=true; $('#rtSave').textContent='저장 중…';
+    try{ await DB.addRetries(todo); $('#modalBg').classList.remove('show');
+      alert(`${todo.length}문항 저장했어요. 다시 맞힘 ${todo.filter(t=>t.correct).length}개 · 또 틀림 ${todo.filter(t=>!t.correct).length}개`); onDone&&onDone(); }
+    catch(err){ alert('저장하지 못했어요: '+err.message); $('#rtSave').disabled=false; $('#rtSave').textContent='저장'; }
+  };
+}
 
 // --- 상담용 한 장 리포트 (새 창 · 인쇄하면 A4 한 장) ---
 const COUNSEL_TIPS={'듣기':'대화의 마지막 말과 상황 설명을 끝까지 듣고 고르는 연습이 필요해요.','대의파악':'첫 문장과 마지막 문장에서 글쓴이의 주장을 먼저 한 줄로 정리하는 연습을 하고 있어요.',
@@ -1488,7 +1587,7 @@ td.l{text-align:left}
 @media screen and (max-width:820px){.page{width:auto;min-height:auto;margin:12px 16px;padding:16px}.bar{position:sticky;top:0;z-index:5;display:flex;gap:10px;align-items:center;justify-content:center;padding:10px;background:#1f2430;color:#fff;font-size:13px}.bar button{border:0;background:#2f5bea;color:#fff;border-radius:8px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}[contenteditable]{outline:none;border-radius:4px}[contenteditable]:hover{background:#fffbe8}[contenteditable]:focus{background:#fff8d6}
 .note{margin:16px}.kpis{grid-template-columns:repeat(2,1fr)}.two,.weak{grid-template-columns:1fr}}
 </head>`;
-function openCounselReport(name, stu, rows){
+function openCounselReport(name, stu, rows, RS){
   const L=rows[rows.length-1], P=rows.length>1?rows[rows.length-2]:null;
   const to100=o=>o.tp?o.r.score/o.tp*100:o.r.score, f1=v=>(Math.round(v*10)/10).toString();
   const br=L.r.branch, teacher=teacherOf(L.r,rosterSync(br,roundKey(L.ex)))||'', cls=stu?stu.class_name:L.r.class_name;
@@ -1546,7 +1645,7 @@ function openCounselReport(name, stu, rows){
     <h2>다음 시험까지 할 것</h2>
     <ol class="plan box" style="padding-left:28px;margin:0" contenteditable="true">
       ${weak[0]?`<li>${esc(weak[0].sub)} 대비 문제지 (지난 시험 오답 + 비슷한 문제) 풀기</li>`:''}
-      <li>틀린 문제 다시 풀기 → 다음 상담 때 다시 맞힌 비율 확인</li>
+      <li>${RS&&RS.tried?`오답 다시 풀기: 지금까지 ${RS.tried}문항 중 <b>${RS.ok}개 다시 맞힘 (${pct(RS.ok,RS.tried)}%)</b>${RS.left?` · 남은 오답 ${RS.left}개 이어서 풀기`:''}`:'틀린 문제 다시 풀기 → 다음 상담 때 다시 맞힌 비율 확인'}</li>
       <li>목표: 다음 시험 <b>${goal}점 이상</b></li>
     </ol>
     <h2>선생님 의견</h2>
@@ -1890,8 +1989,13 @@ async function openWorksheet(name, code, rows){
       if(Q&&Q.q[it.no]) wrong.push({ex:o.ex,it,key:k,pick:+o.r.answers[i]||0}); });
   }
   // 2) 이 학생이 안 본 시험에서 같은 세부 유형
+  // 오답 다시 풀기에서 (가장 최근에) 다시 맞힌 문항 → 기본으로 문제지에서 뺌
+  let RS=null; try{ RS=retryStats(rows, await DB.retries(rows.map(o=>o.r.id))); }catch(e){ console.warn(e); }
+  const retryOk=x=>{ if(!RS) return false; const o=rows.find(o=>o.ex.id===x.ex.id); const h=o&&RS.byKey[o.r.id+'|'+x.it.no]; return !!(h&&h.length&&h[h.length-1].correct); };
+  wrong.forEach(x=>x.reOk=retryOk(x));
+  let hideReOk=true;
   const taken=new Set(rows.map(o=>o.ex.id)), similar=[];
-  for(const ex of EXAMS){
+  for(const ex of [...EXAMS,...BANK]){
     if(taken.has(ex.id)) continue;
     const Q=await getQbank(ex.id); if(!Q) continue;
     ex.items.forEach(it=>{ const k=(it.cat||'미지정')+'|'+(it.sub||''); if(weakSubs[k] && Q.q[it.no]) similar.push({ex,it,key:k}); });
@@ -1899,23 +2003,24 @@ async function openWorksheet(name, code, rows){
   const keyOrder=Object.keys(weakSubs).sort((a,b)=>weakSubs[b]-weakSubs[a]);
   const listen=k=>k.startsWith('듣기|');
   const all={w:wrong,s:similar};
-  const sel=new Set(); wrong.forEach((x,j)=>{ if(!listen(x.key)) sel.add('w'+j); });   // 기본: 틀린 문제(듣기 제외)
+  const sel=new Set(); wrong.forEach((x,j)=>{ if(!listen(x.key) && !x.reOk) sel.add('w'+j); });   // 기본: 틀린 문제(듣기 제외, 다시 맞힌 문항 제외)
   // 필터: 회차(최근 N회차) · 비슷한 문제 학년
-  const roundsDesc=[...new Set(EXAMS.map(roundKey))].sort((a,b)=>koCmp(b,a));
+  const roundsDesc=[...new Set([...EXAMS,...BANK].map(roundKey))].sort((a,b)=>koCmp(b,a));
   const lastEx=rows.slice().sort((a,b)=>koCmp(examDateKey(b.ex),examDateKey(a.ex)))[0];
   const myGrade=lastEx?normGrade(lastEx.ex.grade):'';
   const simGrades=[...new Set(similar.map(x=>normGrade(x.ex.grade)))].sort(koCmp);
   const gradeSel=new Set(simGrades.includes(myGrade)?[myGrade]:simGrades);
   let recentN=0;   // 0 = 전체 회차
   const passRound=x=>!recentN || roundsDesc.slice(0,recentN).includes(roundKey(x.ex));
-  const visible=(pre,x)=>passRound(x) && (pre!=='s' || gradeSel.has(normGrade(x.ex.grade)));
-  const row=(x,j,pre)=>`<div class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${sel.has(pre+j)?'checked':''}> <span class="ws-prev" data-prev="${pre}${j}" title="눌러서 문제 미리 보기">${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번 ▾</span></span></div><div class="ws-pv" id="pv-${pre}${j}" hidden></div>`;
+  const visible=(pre,x)=>passRound(x) && (pre!=='s' || gradeSel.has(normGrade(x.ex.grade))) && !(pre==='w' && hideReOk && x.reOk);
+  const row=(x,j,pre)=>`<div class="ws-item"><input type="checkbox" data-ws="${pre}${j}" ${sel.has(pre+j)?'checked':''}> <span class="ws-prev" data-prev="${pre}${j}" title="눌러서 문제 미리 보기">${pill(x.it.cat)} <b>${esc(x.it.sub||'-')}</b> <span class="muted">${esc(x.ex.name)} · ${x.it.no}번 ▾</span></span>${x.reOk?' <span class="pill" style="background:var(--ok-bg);color:var(--ok)">다시 맞힘</span>':''}</div><div class="ws-pv" id="pv-${pre}${j}" hidden></div>`;
   const section=(list,pre)=>keyOrder.filter(k=>list.some((x,j)=>x.key===k && visible(pre,x))).map(k=>`<div class="ws-grp"><div class="muted" style="font-weight:700">${esc(k.replace('|',' · '))} <span>(누적 오답 ${weakSubs[k]})</span></div>${list.map((x,j)=>x.key===k&&visible(pre,x)?row(x,j,pre):'').join('')}</div>`).join('');
   const allBox=(pre)=>`<label class="ws-item" style="cursor:pointer;font-weight:700"><input type="checkbox" data-wsall="${pre}"> 전체 선택</label>`;
   $('#wsBody').innerHTML=`
     <label class="f" style="margin:10px 0">문제지 제목<input id="wsTitle" value="${esc(name)} 모의고사 대비 오답 문제지"></label>
     <div class="row" style="gap:16px;align-items:flex-end;margin-bottom:6px">
       <label class="f">회차 범위<select id="wsRecent"><option value="0">전체 회차</option>${[1,2,3,4,5,6,8].filter(n=>n<roundsDesc.length).map(n=>`<option value="${n}">최근 ${n}회차</option>`).join('')}</select></label>
+      ${wrong.some(x=>x.reOk)?`<label class="ws-item" style="cursor:pointer;align-self:flex-end;padding-bottom:6px"><input type="checkbox" id="wsReOk" checked> 오답 다시 풀기에서 맞힌 문항 빼기 <span class="muted">(${wrong.filter(x=>x.reOk).length}개)</span></label>`:''}
       ${simGrades.length?`<div class="f"><span>비슷한 문제 학년</span><div class="row" style="gap:10px">${simGrades.map(g=>`<label class="ws-item" style="cursor:pointer"><input type="checkbox" data-wsg="${g}" ${gradeSel.has(g)?'checked':''}> ${g}</label>`).join('')}</div></div>`:''}
     </div>
     <div class="row" style="align-items:flex-start;gap:16px">
@@ -1941,6 +2046,7 @@ async function openWorksheet(name, code, rows){
     bindPrev(); cnt();
   };
   $('#wsRecent').onchange=e=>{ recentN=+e.target.value; renderLists(); };
+  const wr=$('#wsReOk'); if(wr) wr.onchange=e=>{ hideReOk=e.target.checked; renderLists(); };
   document.querySelectorAll('[data-wsg]').forEach(c=>c.onchange=()=>{ c.checked?gradeSel.add(c.dataset.wsg):gradeSel.delete(c.dataset.wsg); renderLists(); });
   // 문제 제목 클릭 → 미리 보기 (틀린 문제는 학생이 고른 답 빨강, 정답 초록)
   function bindPrev(){ document.querySelectorAll('[data-prev]').forEach(el=>el.onclick=()=>{
@@ -1966,7 +2072,7 @@ async function openCommonWorksheet({name='', grade=''}={}){
     <div id="cwBody"></div>`;
   $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
   $('#modalBg').classList.add('show');
-  const grades=[...new Set([...ADM_GRADES, ...EXAMS.map(e=>normGrade(e.grade)).filter(Boolean)])].sort(koCmp);
+  const grades=[...new Set([...ADM_GRADES, ...[...EXAMS,...BANK].map(e=>normGrade(e.grade)).filter(Boolean)])].sort(koCmp);
   const st={mode:'common', grade:grades.includes(grade)?grade:(grades[0]||''), recentN:0, scope:'all', th:40, listen:false};
   const go=async(btn,title,list,withHae,keepNo)=>{
     if(!list.length) return alert('문제를 하나 이상 골라주세요.');
@@ -2027,12 +2133,12 @@ async function openCommonWorksheet({name='', grade=''}={}){
   let roundEx='';
   async function renderRound(){
     const body=$('#cwBody');
-    const exs=EXAMS.filter(e=>!st.grade||normGrade(e.grade)===st.grade).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a)));
+    const exs=[...EXAMS,...BANK].filter(e=>!st.grade||normGrade(e.grade)===st.grade).sort((a,b)=>koCmp(examDateKey(b),examDateKey(a)));
     if(!exs.some(e=>e.id===roundEx)) roundEx=exs[0]?exs[0].id:'';
     const ex=examById(roundEx);
     body.innerHTML=`<div class="row" style="gap:16px;align-items:flex-end">
         <label class="f">학년<select id="crGrade">${grades.map(g=>`<option ${g===st.grade?'selected':''}>${esc(g)}</option>`).join('')}</select></label>
-        <label class="f">시험<select id="crEx">${exs.map(e=>`<option value="${e.id}" ${e.id===roundEx?'selected':''}>${esc(e.name)}</option>`).join('')}</select></label></div>
+        <label class="f">시험<select id="crEx">${exs.map(e=>`<option value="${e.id}" ${e.id===roundEx?'selected':''}>${esc(e.name)}${e.is_bank?' (문제은행)':''}</option>`).join('')}</select></label></div>
       <div id="crInfo" style="margin-top:10px"><p class="muted">${ex?'시험지 불러오는 중…':'이 학년 시험이 아직 없어요.'}</p></div>`;
     $('#crGrade').onchange=e=>{ st.grade=e.target.value; renderRound(); };
     $('#crEx').onchange=e=>{ roundEx=e.target.value; renderRound(); };
