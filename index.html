@@ -55,6 +55,13 @@ h3{font-size:14px;margin:18px 0 8px}
 .exam-item{padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
 .exam-item.sel{border-color:var(--main);background:var(--main-soft)}
 .exam-item b{display:block}
+.ex-grp{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px}
+.ex-grp summary{cursor:pointer;padding:2px 0}
+.ex-grp[open] summary{margin-bottom:8px}
+.ex-grp .exam-item{margin-bottom:5px;padding:6px 10px;display:flex;align-items:center;gap:6px}
+.ex-grp .exam-item b{display:inline;flex:1;font-weight:600;font-size:13px}
+.ex-grp .exam-item .muted{font-size:11px;white-space:nowrap}
+.ex-grp .pill{font-size:11px;padding:1px 7px}
 table{border-collapse:collapse;width:100%}
 th{font-size:12px;color:var(--sub);font-weight:600;text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);background:#fafbfc}
 td{padding:6px;border-bottom:1px solid #f0f1f3}
@@ -442,6 +449,21 @@ function showTab(t){
 }
 
 /* ===================== 1. 시험 관리 ===================== */
+// 시험 목록: 시행 연·월로 크게 묶고, 안에서 학년별로
+let exFilter='all'; const exOpen=new Set();
+function examGroupsHtml(){
+  const list=[...EXAMS,...BANK].filter(e=>exFilter==='all'||(exFilter==='bank')===!!e.is_bank);
+  if(!list.length) return '<p class="muted">등록된 시험이 없습니다.</p>';
+  const ym=e=>(e.exam_date||'').slice(0,7);
+  const keys=[...new Set(list.map(ym))].sort((a,b)=>koCmp(b,a));
+  const latest=keys[0];
+  return keys.map(k=>{ const L=list.filter(e=>ym(e)===k).sort((a,b)=>koCmp(gradeKey(a),gradeKey(b))||koCmp(a.name,b.name));
+    const open=exOpen.has(k)||(editing&&L.some(e=>e.id===editing.id))||(!exOpen.size&&k===latest);
+    const label=k?`${k.slice(0,4)}년 ${+k.slice(5,7)}월`:'시행 연·월 없음';
+    const grades=[...new Set(L.map(gradeKey))];
+    return `<details class="ex-grp" data-ym="${k}" ${open?'open':''}><summary><b>${label}</b> <span class="muted">${grades.join(' · ')} · ${L.length}개</span></summary>
+      ${L.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}"><span class="pill" style="background:#64748b">${esc(gradeKey(e))}</span><b>${esc(e.name)}</b>${e.is_bank?'<span class="pill" style="background:#7e3fb3">문제은행</span>':`<span class="muted">${totalPoints(e)}점</span>`}</div>`).join('')}</details>`; }).join('');
+}
 function renderExamTab(){
   const hasPreset = EXAMS.some(e=>e.name===PRESET.name);
   $('#tab-exam').innerHTML = `
@@ -451,11 +473,8 @@ function renderExamTab(){
         <button class="btn sm primary" id="newExam">+ 새 시험</button></div>
       <button class="btn sm" id="impOpen" style="width:100%;margin-bottom:10px">본사 리포트 가져오기</button>
       ${hasPreset?'':`<button class="btn sm" id="presetExam" style="width:100%;margin-bottom:10px">이번 시험(THE PREMIUM 고1) 등록</button>`}
-      ${EXAMS.length? EXAMS.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}">
-        <b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} ${e.exam_date?roundLabel(roundKey(e)):'시행 연·월 없음'} · ${e.q_count}문항 · ${totalPoints(e)}점</span></div>`).join('')
-        : '<p class="muted">등록된 시험이 없습니다.</p>'}
-      ${BANK.length?`<h3 style="margin:16px 0 8px">문제은행 <span class="muted" style="font-weight:400;font-size:12px">(대비 문제지 전용 · ${BANK.length}개)</span></h3>
-        ${BANK.map(e=>`<div class="exam-item ${editing&&editing.id===e.id?'sel':''}" data-id="${e.id}"><b>${esc(e.name)}</b><span class="muted">${esc(e.grade||'')} · ${e.q_count}문항 · 문제은행</span></div>`).join('')}`:''}
+      <div class="row" style="gap:6px;margin-bottom:8px">${[['all','전체'],['test','학생 시험'],['bank','문제은행']].map(([v,l])=>`<button class="btn sm ${exFilter===v?'primary':''}" data-exf="${v}">${l}</button>`).join('')}</div>
+      ${examGroupsHtml()}
     </div>
     <div class="card" id="examEditor">${importMode? importHtml() : editing? editorHtml() : '<p class="muted">왼쪽에서 시험을 선택하거나 새로 만드세요.</p>'}</div>
   </div>`;
@@ -466,6 +485,8 @@ function renderExamTab(){
     renderExamTab();
   };
   document.querySelectorAll('.exam-item').forEach(el=>el.onclick=()=>{ importMode=false; editing=JSON.parse(JSON.stringify(examById(el.dataset.id))); renderExamTab(); });
+  document.querySelectorAll('[data-exf]').forEach(b=>b.onclick=()=>{ exFilter=b.dataset.exf; renderExamTab(); });
+  document.querySelectorAll('.ex-grp').forEach(d=>d.ontoggle=()=>{ d.open?exOpen.add(d.dataset.ym):exOpen.delete(d.dataset.ym); });
   if(importMode) bindImport(); else if(editing) bindEditor();
 }
 
