@@ -1926,13 +1926,23 @@ async function renderAdminTab(){
   const rowsWithT=mine.map(r=>({r, cls:r.class_name, teacher:teacherOf(r,rosterSync(admBranch,roundKey(G.ex))), prev:prevAll.find(p=>sameResp(p,r))}));
   const byCls={}; rowsWithT.forEach(x=>(byCls[x.cls||'-']=byCls[x.cls||'-']||[]).push(x));
 
-  // ⑤ 담임별 성과 (이번 회차, 선택 분원) — 담임은 그 시험 때 기록된 담임
+  // ⑤ 담임별 성과 (이번 회차, 선택 분원 / 본사 전 분원) — 담임은 그 시험 때 기록된 담임
+  // 전 분원: 본사 계정만 담임 표를 봄 (분원 강사 정보는 그 분원 관리자·본사만). 같은 이름이 다른 분원에 있을 수 있어 '분원|담임'으로 묶음
+  const hqAll=allMode&&isHq(), tBrs=allMode?(hqAll?[...BRANCHES]:[]):[admBranch];
+  const tKey=(b,t)=>allMode?b+'|'+t:t, tName=k=>allMode?k.slice(k.indexOf('|')+1):k, tBr=k=>allMode?k.slice(0,k.indexOf('|')):admBranch;
+  // 최근 명단에 반이 없는 담임(퇴사 등) → 표 아래쪽으로. 명단 회차마다 담임 이름을 모아 마지막으로 나온 회차를 봄
+  const tLast={}, brLatest={};
+  tBrs.forEach(b=>{ brLatest[b]=rosterRounds(b).find(Boolean)||''; (STU[b]||[]).forEach(s=>{ if(!s.teacher) return; const k=tKey(b,s.teacher), rk=s.exam_round||''; if(!tLast[k]||koCmp(rk,tLast[k])>0) tLast[k]=rk; }); });
+  const brHasT=b=>(STU[b]||[]).some(s=>s.teacher);
+  const tGone=k=>{ const t=tName(k), b=tBr(k); if(t.startsWith('(')||!brHasT(b)||!brLatest[b]) return false; return (tLast[k]||'')!==brLatest[b]; };
+  const goneTag=k=>{ if(!tGone(k)) return ''; const l=tLast[k]; return ` <span class="muted" style="font-weight:400;font-size:12px">· 최근 명단에 반 없음${l?` (마지막 ${roundLabel(l).replace(/ \(.*\)$/,'')})`:''}</span>`; };
+  const brIdx=b=>{ const i=BRANCHES.indexOf(b); return i<0?99:i; };
   const tStat={};
   for(const g of ADM_GRADES){
     const {ex,all}=data[g]; if(!ex) continue;
     const pEx=(()=>{ const id=defaultCmp(ex); return id?examById(id):null; })(); const pAll=pEx?await getResponses(pEx.id):[];
-    all.filter(r=>r.branch===admBranch).forEach(r=>{
-      const t=teacherOf(r,rosterSync(admBranch,roundKey(ex)))||'(담임 미지정)';
+    all.filter(r=>tBrs.includes(r.branch)).forEach(r=>{
+      const t=tKey(r.branch, teacherOf(r,rosterSync(r.branch,roundKey(ex)))||'(담임 미지정)');
       const o=tStat[t]=tStat[t]||{n:0,sum:0,g1:0,g2:0,grow:0,gn:0,cls:new Set(),by:{}};
       const ck=r.class_name||'(반 없음)', c=o.by[ck]=o.by[ck]||{n:0,sum:0,g1:0,g2:0,grow:0,gn:0,gc:{}};   // 반 이름으로 묶음 (한 반이 학년을 나눠 응시해도 한 반)
       c.gc[g]=(c.gc[g]||0)+1; c.gs=c.gs||{}; const gz=c.gs[g]=c.gs[g]||{n:0,sum:0,g1:0,g2:0,grow:0,gn:0};   // 한 반 안의 응시 학년별
@@ -1944,7 +1954,7 @@ async function renderAdminTab(){
 
   // ⑥ 담임 × 회차 (선택 분원, 전체 회차) + 담당 기간 성장
   const allResp=[];   // {r, ex, rk, t}
-  for(const ex of EXAMS){ const rk=roundKey(ex); for(const r of (await getResponses(ex.id)).filter(r=>r.branch===admBranch)) allResp.push({r,ex,rk,t:teacherOf(r,rosterSync(admBranch,rk))||'(담임 미지정)'}); }
+  for(const ex of EXAMS){ const rk=roundKey(ex); for(const r of (await getResponses(ex.id)).filter(r=>tBrs.includes(r.branch))) allResp.push({r,ex,rk,t:tKey(r.branch,teacherOf(r,rosterSync(r.branch,rk))||'(담임 미지정)')}); }
   const roundCols=[...new Set(allResp.map(x=>x.rk))].sort(koCmp);
   const tr={};   // 담임 → 회차 → {n,sum,g1}
   allResp.forEach(x=>{ const o=((tr[x.t]=tr[x.t]||{})[x.rk]=tr[x.t][x.rk]||{n:0,sum:0,g1:0}); o.n++; o.sum+=to100(x.r.score,x.ex); if(engGrade(x.r.score,x.ex)===1) o.g1++; });
@@ -1954,8 +1964,10 @@ async function renderAdminTab(){
   Object.values(byStu).forEach(list=>{ list.sort((a,b)=>koCmp(examDateKey(a.ex),examDateKey(b.ex)));
     for(let i=1;i<list.length;i++){ const a=list[i-1], b=list[i]; if(examDateKey(a.ex)===examDateKey(b.ex)) continue;
       const o=tg[b.t]=tg[b.t]||{sum:0,n:0,stu:new Set()}; o.sum+=to100(b.r.score,b.ex)-to100(a.r.score,a.ex); o.n++; o.stu.add(stuIdOf(b.r)); } });
-  const teachers=[...new Set([...Object.keys(tr),...Object.keys(tg)])].sort((a,b)=>a.startsWith('(')-b.startsWith('(')||koCmp(a,b));
-  const noTeacher=!(rosters[admBranch]||[]).some(s=>s.teacher) && !allResp.some(x=>x.r.teacher);
+  // 정렬: 현재 담임 먼저 → (전 분원이면 분원 순) → 이름. 최근 명단에 반이 없는 담임·담임 미지정은 맨 아래
+  const teachers=[...new Set([...Object.keys(tr),...Object.keys(tg)])].sort((a,b)=>tGone(a)-tGone(b)||tName(a).startsWith('(')-tName(b).startsWith('(')||brIdx(tBr(a))-brIdx(tBr(b))||koCmp(tName(a),tName(b)));
+  const tStatList=Object.entries(tStat).sort((a,b)=>tGone(a[0])-tGone(b[0])||tName(a[0]).startsWith('(')-tName(b[0]).startsWith('(')||brIdx(tBr(a[0]))-brIdx(tBr(b[0]))||b[1].n-a[1].n);
+  const noTeacher=tBrs.length>0 && !tBrs.some(b=>(rosters[b]||[]).some(s=>s.teacher)) && !allResp.some(x=>x.r.teacher);
   const teacherView=!!(ME&&ME.role==='teacher');   // 담임: 등급 분석·전체 분원 비교·오답률 TOP5만
 
   // ⑦ 전체 분원 추이 — 분원 × 학년 × 회차: 응시 인원 · 1등급 · 평균(100점 환산)
@@ -2039,28 +2051,28 @@ async function renderAdminTab(){
       :'<p class="muted">이 분원·학년 응답이 없습니다.</p>'}
   </div>
 
-  <div class="card" style="margin-top:14px" ${teacherView||allMode?'hidden':''}>
+  <div class="card" style="margin-top:14px" ${teacherView||(allMode&&!hqAll)?'hidden':''}>
     <h2>담임별 성과 · ${esc(admBranch)} · ${roundLabel(admRound)}</h2>
     ${noTeacher?'<p class="total bad" style="margin-top:-6px">담임 정보가 없어요. 담임 열을 추가한 명단을 올려주세요.</p>':''}
-    <p class="muted" style="margin:-6px 0 10px">이번 회차 고1~고3 합산. 반을 여러 개 맡은 담임은 합계 아래에 반별로 나눠 보여요. 한 반이 학년을 나눠 응시했으면 반 아래에 └ 학년별 줄이 따로 나와요. 성장은 같은 학생의 직전 시험 대비 평균 점수 변화이며, 비교 가능한 학생 수를 함께 표시합니다.</p>
-    <div style="overflow:auto"><table><thead><tr><th>담임</th><th>담당 반</th><th>학생 수</th><th>평균 점수</th><th>1등급 비율</th><th>2등급 이내</th><th>평균 성장</th></tr></thead><tbody>
-      ${Object.entries(tStat).sort((a,b)=>b[1].n-a[1].n).map(([t,o])=>{ const multi=o.cls.size>1;
+    <p class="muted" style="margin:-6px 0 10px">이번 회차 고1~고3 합산. 최근 명단에 맡은 반이 없는 담임은 맨 아래에 흐리게 보여요. 반을 여러 개 맡은 담임은 합계 아래에 반별로 나눠 보여요. 한 반이 학년을 나눠 응시했으면 반 아래에 └ 학년별 줄이 따로 나와요. 성장은 같은 학생의 직전 시험 대비 평균 점수 변화이며, 비교 가능한 학생 수를 함께 표시합니다.</p>
+    <div style="overflow:auto"><table><thead><tr>${allMode?'<th>분원</th>':''}<th>담임</th><th>담당 반</th><th>학생 수</th><th>평균 점수</th><th>1등급 비율</th><th>2등급 이내</th><th>평균 성장</th></tr></thead><tbody>
+      ${tStatList.map(([t,o])=>{ const multi=o.cls.size>1, gone=tGone(t), bc=allMode?'<td></td>':'', dim=gone?' style="opacity:.55"':'';
         const lbl=k=>{ const gs=Object.keys(o.by[k].gc).sort(koCmp); return `${esc(k)} <span class="muted">${gs.join('·')}</span>`; };
         // 한 반이 학년을 나눠 응시했으면 그 아래 └ 학년별 줄
-        const gRows=(k,pad)=>{ const c=o.by[k], gs=Object.keys(c.gc).sort(koCmp); return gs.length>1?gs.map(g=>`<tr class="adm-sub"><td></td><td style="padding-left:${pad}px">└ ${esc(g)} <span class="muted">응시</span></td>${cells(c.gs[g])}</tr>`).join(''):''; };
+        const gRows=(k,pad)=>{ const c=o.by[k], gs=Object.keys(c.gc).sort(koCmp); return gs.length>1?gs.map(g=>`<tr class="adm-sub"${dim}>${bc}<td></td><td style="padding-left:${pad}px">└ ${esc(g)} <span class="muted">응시</span></td>${cells(c.gs[g])}</tr>`).join(''):''; };
         const cells=z=>`<td>${z.n}</td><td>${(z.sum/z.n).toFixed(1)}</td><td><b>${pct(z.g1,z.n)}%</b> <span class="muted">(${z.g1}명)</span></td><td>${pct(z.g2,z.n)}% <span class="muted">(${z.g2}명)</span></td>
           <td>${z.gn?`${diffTag(z.grow/z.gn)} <span class="muted">(${z.gn}명)</span>`:'<span class="muted">지난 기록 없음</span>'}</td>`;
-        return `<tr${multi?' style="background:#fafbfc"':''}><td><b>${esc(t)}</b></td><td>${multi?`<b>합계</b> <span class="muted">· 반 ${o.cls.size}개</span>`:lbl([...o.cls][0])}</td>${cells(o)}</tr>`
-          + (multi?Object.keys(o.by).sort(koCmp).map(k=>`<tr class="adm-sub"><td></td><td style="padding-left:18px">└ ${lbl(k)}</td>${cells(o.by[k])}</tr>`+gRows(k,40)).join(''):gRows([...o.cls][0],18)); }).join('') || '<tr><td colspan="7" class="muted">응답이 없습니다.</td></tr>'}
+        return `<tr${gone?' style="opacity:.55"':multi?' style="background:#fafbfc"':''}>${allMode?`<td>${esc(tBr(t))}</td>`:''}<td><b>${esc(tName(t))}</b>${goneTag(t)}</td><td>${multi?`<b>합계</b> <span class="muted">· 반 ${o.cls.size}개</span>`:lbl([...o.cls][0])}</td>${cells(o)}</tr>`
+          + (multi?Object.keys(o.by).sort(koCmp).map(k=>`<tr class="adm-sub"${dim}>${bc}<td></td><td style="padding-left:18px">└ ${lbl(k)}</td>${cells(o.by[k])}</tr>`+gRows(k,40)).join(''):gRows([...o.cls][0],18)); }).join('') || `<tr><td colspan="${allMode?8:7}" class="muted">응답이 없습니다.</td></tr>`}
     </tbody></table></div>
   </div>
 
-  <div class="card" style="margin-top:14px" ${teacherView||allMode?'hidden':''}>
+  <div class="card" style="margin-top:14px" ${teacherView||(allMode&&!hqAll)?'hidden':''}>
     <h2>담임 누적 · ${esc(admBranch)} · 전체 회차</h2>
     <p class="muted" style="margin:-6px 0 10px">칸마다 <b>평균 점수</b> · 1등급 비율 · 학생 수. 담당 기간 성장은 학생이 연달아 본 두 시험의 점수 변화를 <b>뒤 시험 때 담임</b>의 몫으로 모아 평균 낸 값이에요 (담임이 바뀐 학생은 바뀐 뒤부터 새 담임에게).</p>
-    <div style="overflow:auto"><table class="adm"><thead><tr><th>담임</th>${roundCols.map(k=>`<th>${roundLabel(k)}</th>`).join('')}<th>담당 기간 성장</th></tr></thead><tbody>
-      ${teachers.map(t=>`<tr><td><b>${esc(t)}</b></td>${roundCols.map(k=>{ const o=tr[t]&&tr[t][k]; return o?`<td><b>${(o.sum/o.n).toFixed(1)}</b><br><span class="muted">1등급 ${pct(o.g1,o.n)}% · ${o.n}명</span></td>`:'<td class="muted">-</td>'; }).join('')}
-        <td>${tg[t]?`${diffTag(tg[t].sum/tg[t].n)}<br><span class="muted">학생 ${tg[t].stu.size}명 · ${tg[t].n}건</span>`:'<span class="muted">-</span>'}</td></tr>`).join('') || `<tr><td colspan="${roundCols.length+2}" class="muted">응답이 없습니다.</td></tr>`}
+    <div style="overflow:auto"><table class="adm"><thead><tr>${allMode?'<th>분원</th>':''}<th>담임</th>${roundCols.map(k=>`<th>${roundLabel(k)}</th>`).join('')}<th>담당 기간 성장</th></tr></thead><tbody>
+      ${teachers.map(t=>`<tr${tGone(t)?' style="opacity:.55"':''}>${allMode?`<td>${esc(tBr(t))}</td>`:''}<td><b>${esc(tName(t))}</b>${goneTag(t)}</td>${roundCols.map(k=>{ const o=tr[t]&&tr[t][k]; return o?`<td><b>${(o.sum/o.n).toFixed(1)}</b><br><span class="muted">1등급 ${pct(o.g1,o.n)}% · ${o.n}명</span></td>`:'<td class="muted">-</td>'; }).join('')}
+        <td>${tg[t]?`${diffTag(tg[t].sum/tg[t].n)}<br><span class="muted">학생 ${tg[t].stu.size}명 · ${tg[t].n}건</span>`:'<span class="muted">-</span>'}</td></tr>`).join('') || `<tr><td colspan="${roundCols.length+(allMode?3:2)}" class="muted">응답이 없습니다.</td></tr>`}
     </tbody></table></div>
     <p class="muted" style="margin-top:8px">학생 수가 적은 담임은 한두 명 점수로 숫자가 크게 달라지니 인원과 함께 보세요.</p>
   </div>
@@ -2096,17 +2108,18 @@ async function renderAdminTab(){
       sh.push([`전체분원_${g}`,[[`${D.ex.name} · ${roundLabel(admRound)}`],[],gH('분원'),...ALL_BRANCHES.map(b=>{ const l=D.sum.filter(r=>r.branch===b); return gR(b,gradeCounts(l,D.ex),l.length); }),gR('전체',gradeCounts(D.sum,D.ex),D.sum.length)]]); }
     if(G.ex) sh.push([`오답률TOP5_${admGrade}`,[[G.ex.name],[],['분원','응시',...[1,2,3,4,5].flatMap(n=>[n+'위 번호',n+'위 유형',n+'위 오답률(%)'])],
       ...topRows.map(x=>{ const t=top3(x.l); return [x.label,x.l.length,...[0,1,2,3,4].flatMap(i=>t[i]?[t[i].it.no,[t[i].it.cat,t[i].it.sub].filter(Boolean).join(' · '),t[i].w]:['','',''])]; })]]);
-    if(!teacherView&&!allMode){
-      if(G.ex) sh.push([`반별성적_${admGrade}`,[[`${admBranch} · ${G.ex.name}`,prevEx?'변화: '+prevEx.name+' 대비':''],[],['반','담임','이름','점수','등급','변화'],
+    if(!teacherView&&(!allMode||hqAll)){
+      if(G.ex&&!allMode) sh.push([`반별성적_${admGrade}`,[[`${admBranch} · ${G.ex.name}`,prevEx?'변화: '+prevEx.name+' 대비':''],[],['반','담임','이름','점수','등급','변화'],
         ...Object.keys(byCls).sort(koCmp).flatMap(c=>byCls[c].map(x=>[c,x.teacher||'',x.r.student_name,x.r.score,engGrade(x.r.score,G.ex),x.prev?r1(to100(x.r.score,G.ex)-to100(x.prev.score,prevEx)):'']))]]);
-      const tRow=(t,c,z)=>[t,c,z.n,r1(z.sum/z.n),pct(z.g1,z.n),pct(z.g2,z.n),z.gn?r1(z.grow/z.gn):'',z.gn];
-      sh.push(['담임별성과',[[`${admBranch} · ${roundLabel(admRound)} · 고1~고3 합산`],[],['담임','반','학생 수','평균','1등급(%)','2등급 이내(%)','평균 성장','성장 비교 학생 수'],
-        ...Object.entries(tStat).sort((a,b)=>b[1].n-a[1].n).flatMap(([t,o])=>{ const kl=k=>{ const gs=Object.keys(o.by[k].gc).sort(koCmp); return `${k} (${gs.join('·')})`; };
+      const BH=allMode?['분원']:[], bv=t=>allMode?[tBr(t)]:[], gn=t=>tGone(t)?' (최근 명단에 반 없음)':'';
+      const tRow=(t,c,z)=>[...bv(t),tName(t)+gn(t),c,z.n,r1(z.sum/z.n),pct(z.g1,z.n),pct(z.g2,z.n),z.gn?r1(z.grow/z.gn):'',z.gn];
+      sh.push(['담임별성과',[[`${admBranch} · ${roundLabel(admRound)} · 고1~고3 합산`],[],[...BH,'담임','반','학생 수','평균','1등급(%)','2등급 이내(%)','평균 성장','성장 비교 학생 수'],
+        ...tStatList.flatMap(([t,o])=>{ const kl=k=>{ const gs=Object.keys(o.by[k].gc).sort(koCmp); return `${k} (${gs.join('·')})`; };
           const gr=k=>{ const c=o.by[k], gs=Object.keys(c.gc).sort(koCmp); return gs.length>1?gs.map(g=>tRow(t,`  └ ${k} · ${g} 응시`,c.gs[g])):[]; };
           return o.cls.size>1?[tRow(t,'합계',o),...Object.keys(o.by).sort(koCmp).flatMap(k=>[tRow(t,kl(k),o.by[k]),...gr(k)])]:[tRow(t,kl([...o.cls][0]),o),...gr([...o.cls][0])]; })]]);
-      sh.push(['담임누적',[[`${admBranch} · 전체 회차`],[],['담임','회차','학생 수','평균','1등급(%)'],
-        ...teachers.flatMap(t=>roundCols.filter(k=>tr[t]&&tr[t][k]).map(k=>{ const o=tr[t][k]; return [t,roundLabel(k),o.n,r1(o.sum/o.n),pct(o.g1,o.n)]; })),
-        [],['담임','담당 기간 성장','학생 수','건수'],...teachers.filter(t=>tg[t]).map(t=>[t,r1(tg[t].sum/tg[t].n),tg[t].stu.size,tg[t].n])]]);
+      sh.push(['담임누적',[[`${admBranch} · 전체 회차`],[],[...BH,'담임','회차','학생 수','평균','1등급(%)'],
+        ...teachers.flatMap(t=>roundCols.filter(k=>tr[t]&&tr[t][k]).map(k=>{ const o=tr[t][k]; return [...bv(t),tName(t)+gn(t),roundLabel(k),o.n,r1(o.sum/o.n),pct(o.g1,o.n)]; })),
+        [],[...BH,'담임','담당 기간 성장','학생 수','건수'],...teachers.filter(t=>tg[t]).map(t=>[...bv(t),tName(t)+gn(t),r1(tg[t].sum/tg[t].n),tg[t].stu.size,tg[t].n])]]);
     }
     const trB2=trBranches.filter(b=>trd[b]);
     if(showAll) sh.push(['전체분원추이_표',[['전체 분원 추이 · 응시 인원 / 1등급 인원 / 1등급 비율(%) / 평균'],[],
