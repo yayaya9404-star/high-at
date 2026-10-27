@@ -980,7 +980,8 @@ async function renderRosterTab(){
         답안을 넣을 때는 그 시험 회차의 명단에서 반·담임을 가져와요. 그 회차 명단이 없으면 가장 가까운 이전 회차 명단을 써요.</p>
       <div class="row"><label class="f">회차<select id="rRound">${roundChoices().map(k=>`<option value="${k}" ${k===rosterRk?'selected':''}>${roundLabel(k)}${saved.includes(k)?' ✓':''}</option>`).join('')}</select></label>
         <label class="f">분원<select id="rBranch">${BRANCHES.map(b=>`<option ${b===br?'selected':''}>${b}</option>`).join('')}</select></label>
-        <label class="f">파일<input type="file" id="rFile" accept=".xlsx,.xls,.csv"></label></div>
+        <label class="f">파일<input type="file" id="rFile" accept=".xlsx,.xls,.csv"></label>
+        <button class="btn" id="rTpl" style="align-self:flex-end">명단 엑셀 양식 받기</button></div>
       <div id="rDraft"></div>
     </div>
     <div class="card">
@@ -997,6 +998,7 @@ async function renderRosterTab(){
   $('#rBranch').onchange=e=>{ prefs.branch=e.target.value; savePrefs(); renderRosterTab(); };
   $('#rRound').onchange=e=>{ rosterRk=e.target.value; renderRosterTab(); };
   const sge=$('#rSgEdit'); if(sge) sge.onclick=()=>openSchoolGradeEdit(br, list);
+  $('#rTpl').onclick=()=>downloadRosterTemplate($('#rBranch').value, $('#rRound').value);
   $('#rFile').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
     if(!window.XLSX) return alert('엑셀 읽기 도구를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
@@ -3319,15 +3321,56 @@ async function readAnswerSheet(file, ex){
   })).filter(x=>x.name);
 }
 
+// 엑셀 양식 내려받기 (머리글 + 학생 줄) — 올리는 쪽이 읽는 열 이름 그대로
+function downloadSheet(fname, aoa, widths, guide){
+  if(!window.XLSX) return alert('엑셀 도구를 불러오지 못했어요. 인터넷 연결을 확인하세요.');
+  const wb=XLSX.utils.book_new(), ws=XLSX.utils.aoa_to_sheet(aoa);
+  if(widths) ws['!cols']=widths.map(w=>({wch:w}));
+  XLSX.utils.book_append_sheet(wb, ws, '입력');
+  if(guide) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(guide.map(t=>[t])), '쓰는 법');
+  XLSX.writeFile(wb, fname.replace(/[\\/:*?"<>|]/g,'_'));
+}
+function downloadOmrTemplate(ex){   // 한 회차 전체(고1~고3 섞어서) — '응시 학년' 열로 학년별 시험에 나눠 들어감
+  const rk=roundKey(ex), rx=EXAMS.filter(e=>roundKey(e)===rk), n=Math.max(ex.q_count||45, ...rx.map(e=>e.q_count||0));
+  const stu=rosterSync(prefs.branch, rk);
+  const head=['반','이름','회원코드','응시 학년',...Array.from({length:n},(_,i)=>String(i+1))];
+  const body=stu.length?stu.map(st=>[st.class_name||'',st.student_name||'',st.member_code||'',normGrade(st.grade)||st.grade||'']):[['A반','홍길동','12345','고1'],['B반','김철수','12346','고2']];
+  const gs=[...new Set(stu.map(st=>normGrade(st.grade)).filter(Boolean))].sort(koCmp);
+  downloadSheet(`OMR양식_${prefs.branch}_${roundLabel(rk)}.xlsx`, [head,...body], [14,10,12,9,...Array(n).fill(4)],
+    ['OMR 답안 입력 양식',`${roundLabel(rk)} · 분원: ${prefs.branch}`,'',
+     '· 고1·고2·고3을 한 시트에 같이 적어요. 응시 학년 열을 보고 이 회차 학년별 시험에 알아서 나눠 넣어요.',
+     '· 1~'+n+' 칸에 학생이 고른 번호(1~5)를 적어요. 안 쓴 문항은 비워 두면 무응답이에요.',
+     '· 결시한 학생은 줄을 지우거나 답을 모두 비워 두면 빠져요.',
+     '· 회원코드가 있으면 회원코드로, 없으면 이름(+반)으로 명단과 연결해요.',
+     stu.length?`· 이 회차 명단 ${stu.length}명(${gs.join('·')})을 미리 채워 두었어요.`:'· 이 회차 명단이 없어 예시 두 줄만 넣었어요. 지우고 학생을 적어 주세요.',
+     '· 다 적으면 OMR 입력 → 엑셀로 한 번에 입력에서 이 파일을 올려요. 어느 학년 시험에서 열어도 돼요.']);
+}
+function downloadRosterTemplate(br, rk){
+  const list=(STU[br]||[]).filter(st=>(st.exam_round||'')===rk);
+  const head=['반','담임','이름','회원코드','응시 학년','학년'];
+  const body=list.length?list.map(st=>[st.class_name||'',st.teacher||'',st.student_name||'',st.member_code||'',st.grade||'',st.school_grade||'']):[['MA1(1-3개월)','김선생','홍길동','12345','고1','중2'],['MA1(1-3개월)','김선생','김철수','12346','고1','중3']];
+  downloadSheet(`명단양식_${br}_${roundLabel(rk)}.xlsx`, [head,...body], [16,10,10,12,10,8],
+    ['응시 명단 양식',`분원: ${br} · ${roundLabel(rk)}`,'',
+     '· 반: 레벨 이름 그대로 (예: MA1(1-3개월))',
+     '· 응시 학년: 이번 모의고사를 보는 학년 (고1·고2·고3)',
+     '· 학년: 실제 학년 (예: 중2 학생이 고1 모의고사를 보면 응시 학년 고1, 학년 중2). 모르면 비워도 돼요.',
+     '· 회원코드: 학생 고유 번호 — 회차가 바뀌어도 같은 학생으로 이어져요.',
+     '· 적힌 순서가 OMR 입력 순서가 돼요.',
+     list.length?`· 지금 저장된 ${roundLabel(rk)} 명단 ${list.length}명을 채워 두었어요. 고쳐서 다시 올리면 돼요.`:'· 예시 두 줄은 지우고 학생을 적어 주세요.',
+     '· 다 적으면 명단 올리기에서 회차·분원을 고르고 이 파일을 올려요.']);
+}
 async function openAnswerImport(ex){
   $('#modal').innerHTML=`<div class="row" style="justify-content:space-between"><h2 style="margin:0">답안 엑셀로 한 번에 입력</h2><button class="btn" id="closeM">닫기</button></div>
     <div id="xaTarget"></div>
     <p class="muted">첫 줄에 이름과 1~45 번호, 아래로 학생별 고른 번호가 있는 엑셀. 본사 양식(시험정보·응시학년·분원·선생님·ID·학생명…)도 그대로 올리면 돼요 — 고1~고3이 한 시트에 섞여 있으면 학년별로 이 회차 시험에 나눠 넣어요. 분원: <b>${esc(prefs.branch)}</b> (OMR 입력 화면에서 고른 분원)</p>
-    <input type="file" id="xaFile" accept=".xlsx,.xls,.csv"><div id="xaBody"></div>`;
+    <div class="row" style="gap:10px;align-items:center"><input type="file" id="xaFile" accept=".xlsx,.xls,.csv"><button class="btn" id="xaTpl">OMR 엑셀 양식 받기</button><span class="muted" id="xaTplNote"></span></div><div id="xaBody"></div>`;
   $('#closeM').onclick=()=>$('#modalBg').classList.remove('show');
   $('#modalBg').classList.add('show');
   const target=ex=>{ $('#xaTarget').innerHTML=`<div class="xa-target">넣을 시험 <b>${esc(roundLabel(roundKey(ex)))}</b> · <b>${esc(normGrade(ex.grade)||'')}</b> · ${esc(ex.name)} <span class="muted">(시행 ${esc(fmtYM(ex.exam_date)||'-')})</span></div>`; };
   target(ex);
+  { const L=rosterSync(prefs.branch, roundKey(ex)), gs=[...new Set(L.map(st=>normGrade(st.grade)).filter(Boolean))].sort(koCmp);
+    $('#xaTplNote').textContent=L.length?`${roundLabel(roundKey(ex))} ${prefs.branch} 명단 ${L.length}명(${gs.join('·')})이 응시 학년과 함께 채워진 양식이에요`:'이 회차 명단이 없어 빈 양식이에요'; }
+  $('#xaTpl').onclick=()=>downloadOmrTemplate(ex);
   $('#xaFile').onchange=e=>{ const f=e.target.files[0]; if(f) run(f,ex); };
   const run=async(f,ex)=>{
     target(ex);
